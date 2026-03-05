@@ -559,7 +559,7 @@ body {
   text-align: center;
   margin-top: 60px;
   font-size: 13px;
-  color: rgba(255,255,255,0.2);
+  color: rgba(255, 255, 255, 0.2);
 }
 
 .shadow-glow {
@@ -581,9 +581,11 @@ body {
   .hero-title {
     font-size: 42px;
   }
+
   .massive-title {
     font-size: 36px;
   }
+
   .income-grid {
     grid-template-columns: 1fr;
   }
@@ -593,32 +595,9 @@ body {
   .main-content {
     padding: 100px 15px 40px;
   }
-
-  .dashboard-header {
-    flex-direction: column;
-    align-items: flex-start !important;
-    gap: 20px !important;
-  }
-
-  .header-actions {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .stats-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .stat-value {
-    font-size: 22px;
-  }
 }
 
 @media (max-width: 480px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-
   .hero-title {
     font-size: 38px;
   }
@@ -923,9 +902,20 @@ body {
   justify-content: center;
 }
 
-.table-icon.deposit { background: rgba(0, 255, 127, 0.1); color: #00FF7F; }
-.table-icon.withdraw { background: rgba(255, 68, 68, 0.1); color: #ff4444; }
-.table-icon.virtual { background: rgba(138, 43, 226, 0.1); color: var(--primary); }
+.table-icon.deposit {
+  background: rgba(0, 255, 127, 0.1);
+  color: #00FF7F;
+}
+
+.table-icon.withdraw {
+  background: rgba(255, 68, 68, 0.1);
+  color: #ff4444;
+}
+
+.table-icon.virtual {
+  background: rgba(138, 43, 226, 0.1);
+  color: var(--primary);
+}
 
 .table-type-text {
   font-weight: 600;
@@ -944,8 +934,13 @@ body {
   font-size: 15px;
 }
 
-.table-amount.pos { color: #00FF7F; }
-.table-amount.neg { color: #ff4444; }
+.table-amount.pos {
+  color: #00FF7F;
+}
+
+.table-amount.neg {
+  color: #ff4444;
+}
 
 .table-time {
   font-size: 13px;
@@ -1022,6 +1017,7 @@ body {
 
 /* Responsive Table */
 @media (max-width: 768px) {
+
   .transactions-table th:nth-child(4),
   .transactions-table td:nth-child(4) {
     display: none;
@@ -1199,4 +1195,50 @@ body {
   .main-dashboard-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Animation Utilities */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite !important;
+}
+
+@keyframes pulse-anim {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+}
+
+.loader-ring {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 215, 0, 0.1);
+  border-top: 4px solid var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto;
+}
+
+.pulse {
+  animation: pulse-anim 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }

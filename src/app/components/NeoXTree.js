@@ -4,8 +4,6 @@ import ReactFlow, {
     MiniMap,
     Controls,
     Background,
-    useNodesState,
-    useEdgesState,
 } from 'react-flow-renderer'
 import { useAccount, useReadContract, usePublicClient } from 'wagmi'
 import { readContract } from 'viem/actions' // Direct contract read for speed
@@ -13,11 +11,15 @@ import { formatUnits } from 'viem'
 import { NEOX_ABI, NEOX_ADDRESS } from '../config/contract'
 import { Loader2, Network, ShieldCheck, Zap, RefreshCw, Layers, UserPlus } from 'lucide-react'
 
+// Constants outside component to avoid re-renders
+const nodeTypes = {}
+const edgeTypes = {}
+
 export default function NeoXTree() {
     const { address, isConnected } = useAccount()
     const publicClient = usePublicClient()
-    const [nodes, setNodes, onNodesChange] = useNodesState([])
-    const [edges, setEdges, onEdgesChange] = useEdgesState([])
+    const [nodes, setNodes] = useState([])
+    const [edges, setEdges] = useState([])
     const [loading, setLoading] = useState(true)
     const hasFetched = useRef(false)
 
@@ -31,14 +33,16 @@ export default function NeoXTree() {
 
     const buildTree = useCallback(async () => {
         if (!address || !publicClient || !userData) return
+
+        console.log('>>> [NeoXTree] BUILDING MATRIX FOR:', address)
         setLoading(true)
 
         try {
-            const isRegistered = userData[0]
-            const idValue = userData[2]
-            const totalROI = userData[6]
-
+            const isRegistered = userData?.[0]
             if (!isRegistered) {
+                console.warn('>>> [NeoXTree] ACCOUNT NOT REGISTERED')
+                setNodes([])
+                setEdges([])
                 setLoading(false)
                 return
             }
@@ -48,7 +52,6 @@ export default function NeoXTree() {
             const myAddr = address.toLowerCase()
             const processed = new Set()
 
-            // RECURSIVE FUNCTION USING getReferrals()
             const fetchAndAddDownline = async (currentAddr, x, y, level, parentId = null) => {
                 const addrLower = currentAddr.toLowerCase()
                 if (processed.has(addrLower)) return
@@ -57,8 +60,6 @@ export default function NeoXTree() {
                 const isMe = addrLower === myAddr
                 const nodeId = `node-${addrLower}`
 
-                // 1. Fetch children for this node via Smart Contract directly
-                // This replaces the unreliable log-based scanning
                 const children = await readContract(publicClient, {
                     address: NEOX_ADDRESS,
                     abi: NEOX_ABI,
@@ -66,48 +67,34 @@ export default function NeoXTree() {
                     args: [currentAddr]
                 }).catch(() => [])
 
-                // 2. Add current node to the list
                 newNodes.push({
                     id: nodeId,
                     data: {
-                        label: isMe ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                <div style={{ fontSize: '10px', fontWeight: 800 }}>CORE IDENTITY (YOU)</div>
-                                <div style={{ fontSize: '13px' }}>{currentAddr.slice(0, 8)}...{currentAddr.slice(-6)}</div>
-                                <div style={{ height: '1px', background: 'rgba(0,0,0,0.1)', margin: '4px 0' }}></div>
-                                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-                                    <div><div style={{ fontSize: '8px', opacity: 0.6 }}>STAKE</div><div style={{ fontSize: '10px' }}>{formatUnits(idValue || 0n, 18)}</div></div>
-                                    <div><div style={{ fontSize: '8px', opacity: 0.6 }}>EARNED</div><div style={{ fontSize: '10px' }}>{formatUnits(totalROI || 0n, 18)}</div></div>
-                                </div>
-                            </div>
-                        ) : (
-                            <div>
-                                <div style={{ fontSize: '9px', color: 'var(--text-dim)' }}>LEVEL {level} PARTNER</div>
-                                <div style={{ fontWeight: 700 }}>{currentAddr.slice(0, 8)}...{currentAddr.slice(-6)}</div>
-                                <div style={{ fontSize: '10px', color: 'var(--primary)', marginTop: '4px' }}>{children.length} Referrals</div>
+                        label: (
+                            <div className={isMe ? "node-me" : "node-partner"}>
+                                {isMe ? <strong>CORE IDENTITY</strong> : <span style={{ fontSize: '9px' }}>PARTNER</span>}
+                                <div style={{ fontSize: '11px', fontFamily: 'monospace' }}>{currentAddr.slice(0, 6)}...{currentAddr.slice(-4)}</div>
+                                <div style={{ fontSize: '10px', color: 'var(--primary)', marginTop: '4px' }}>{children.length} Links</div>
                             </div>
                         )
                     },
                     position: { x, y },
                     style: isMe ? {
-                        background: 'var(--primary)',
-                        color: '#050A18',
+                        background: '#FFD700',
+                        color: '#000',
                         border: 'none',
-                        borderRadius: '20px',
-                        fontWeight: 'bold',
-                        padding: '16px',
-                        width: '210px',
-                        boxShadow: '0 0 50px var(--primary-glow)',
-                        zIndex: 20
+                        borderRadius: '16px',
+                        padding: '12px',
+                        width: '180px',
+                        fontWeight: 800,
+                        boxShadow: '0 0 30px rgba(255, 215, 0, 0.4)'
                     } : {
                         background: 'rgba(255, 255, 255, 0.05)',
                         color: '#fff',
-                        border: '1px solid var(--glass-border)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
                         borderRadius: '12px',
                         padding: '10px',
-                        fontSize: '11px',
-                        width: '180px',
-                        textAlign: 'center'
+                        width: '150px'
                     }
                 })
 
@@ -117,33 +104,30 @@ export default function NeoXTree() {
                         source: parentId,
                         target: nodeId,
                         animated: true,
-                        style: { stroke: isMe ? 'var(--primary)' : 'var(--glass-border)', strokeWidth: 2 }
+                        style: { stroke: isMe ? '#FFD700' : 'rgba(255,255,255,0.2)', strokeWidth: 2 }
                     })
                 }
 
-                // 3. Recurse for children (Parallel fetch for speed)
-                if (children.length > 0 && level < 3) { // Limit to 3 levels for UI performance
-                    const spacing = 250 / (level + 1)
-                    const startX = x - ((children.length - 1) * spacing * 1.5) / 2
-
+                if (children.length > 0 && level < 3) {
+                    const spacing = 220 / (level + 1)
+                    const startX = x - ((children.length - 1) * spacing * 2) / 2
                     await Promise.all(children.map((child, index) =>
-                        fetchAndAddDownline(child, startX + index * spacing * 2.5, y + 160, level + 1, nodeId)
+                        fetchAndAddDownline(child, startX + index * spacing * 2, y + 140, level + 1, nodeId)
                     ))
                 }
             }
 
-            // Start construction from 'Me'
             await fetchAndAddDownline(myAddr, 250, 50, 0)
-
-            setNodes([...newNodes])
-            setEdges([...newEdges])
+            console.log('>>> [NeoXTree] MATRIX BUILT:', newNodes.length, 'nodes found')
+            setNodes(newNodes)
+            setEdges(newEdges)
 
         } catch (error) {
-            console.error('[NeoXTree] Contract-based mapping failed:', error)
+            console.error('>>> [NeoXTree] BUILD CRASH:', error)
         } finally {
             setLoading(false)
         }
-    }, [address, publicClient, userData, setNodes, setEdges])
+    }, [address, publicClient, userData])
 
     useEffect(() => {
         if (isConnected && address && publicClient && userData && !hasFetched.current) {
@@ -161,86 +145,62 @@ export default function NeoXTree() {
     )
 
     if (loading) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--surface)', borderRadius: '30px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '600px', background: 'rgba(0,0,0,0.2)', borderRadius: '30px' }}>
             <div className="discovery-aura">
-                <Loader2 className="animate-spin" size={56} style={{ color: 'var(--primary)', position: 'relative', zIndex: 1 }} />
+                <Loader2 className="animate-spin" size={40} style={{ color: 'var(--primary)', position: 'relative', zIndex: 1 }} />
                 <div className="aura-ring"></div>
             </div>
-            <p style={{ marginTop: '30px', color: 'var(--text-dim)', fontSize: '14px', letterSpacing: '2px', fontWeight: 600 }}>FETCHING SMART CONTRACT STATE...</p>
+            <p style={{ marginTop: '20px', color: 'var(--text-dim)', fontSize: '12px', letterSpacing: '2px', fontWeight: 600 }}>SYNCHRONIZING MATRIX...</p>
             <style jsx>{`
                 .discovery-aura { position: relative; display: flex; align-items: center; justify-content: center; }
-                .aura-ring { position: absolute; width: 100px; height: 100px; border: 2px dashed var(--primary); border-radius: 50%; opacity: 0.2; animation: spin 10s linear infinite; }
-                @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                .aura-ring { position: absolute; width: 80px; height: 80px; border: 1px dashed var(--primary); border-radius: 50%; opacity: 0.2; animation: spin 8s linear infinite; }
             `}</style>
         </div>
     )
 
     return (
-        <div style={{ width: '100%', height: '100%', minHeight: '580px', background: 'rgba(5, 10, 24, 0.4)', borderRadius: '30px', border: '1px solid var(--glass-border)', overflow: 'hidden', position: 'relative', boxShadow: 'inset 0 0 80px rgba(0,0,0,0.6)' }}>
+        <div style={{ width: '100%', height: '600px', position: 'relative', overflow: 'hidden' }}>
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                fitView
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onInit={(instance) => instance.fitView()}
                 style={{ background: 'transparent' }}
                 nodesDraggable={true}
                 zoomOnScroll={true}
-                maxZoom={2}
-                minZoom={0.05}
+                maxZoom={1.5}
+                minZoom={0.1}
             >
-                <Background variant="dots" color="rgba(255,255,255,0.03)" gap={30} size={1.5} />
-                <Controls style={{ background: 'var(--surface-light)', border: '1px solid var(--glass-border)', fill: 'white', borderRadius: '12px', padding: '5px' }} />
+                <Background variant="dots" color="rgba(255,215,0,0.1)" gap={32} size={1} />
             </ReactFlow>
 
-            {/* Matrix Console */}
-            <div style={{ position: 'absolute', top: '25px', left: '25px', display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
+            {/* HUD OVERLAY */}
+            <div style={{ position: 'absolute', top: '20px', left: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px', zIndex: 10 }}>
                 <div className="hud-badge active">
-                    <ShieldCheck size={16} />
-                    <span>CONTRACT STATE SYNC</span>
+                    <ShieldCheck size={14} />
+                    <span>SECURE MATRIX</span>
                 </div>
-                <div className="hud-badge secondary">
-                    <UserPlus size={16} />
-                    <span>REAL-TIME PARTNERS</span>
-                </div>
-                <button
-                    className="hud-badge refresh-btn"
-                    onClick={() => buildTree()}
-                    disabled={loading}
-                >
-                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-                    <span>REBOOT MATRIX</span>
+                <button className="hud-badge refresh-btn" onClick={() => buildTree()} disabled={loading}>
+                    <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                    <span>SYNC DATA</span>
                 </button>
             </div>
 
-            <div className="matrix-legend">
-                <div className="legend-title">Mapping Status</div>
-                <div className="legend-items">
-                    <div className="legend-item">
-                        <div className="dot core"></div>
-                        <span>Core Node</span>
-                    </div>
-                    <div className="legend-item">
-                        <div className="dot partner-sub"></div>
-                        <span>Active Downline</span>
-                    </div>
-                </div>
-            </div>
 
             <style jsx>{`
-                .hud-badge { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 12px; font-size: 11px; font-weight: 800; border: 1px solid var(--glass-border); backdrop-filter: blur(10px); }
-                .hud-badge.active { background: rgba(255, 215, 0, 0.1); color: var(--primary); border-color: rgba(255, 215, 0, 0.3); }
-                .hud-badge.secondary { background: rgba(0, 119, 190, 0.1); color: var(--secondary); border-color: rgba(0, 119, 190, 0.3); }
-                .refresh-btn { background: rgba(5, 10, 24, 1); color: #fff; border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.2s; }
-                .refresh-btn:hover { background: var(--primary); color: #000; }
+                .node-me { display: flex; flex-direction: column; align-items: center; text-align: center; color: #000; }
+                .node-partner { display: flex; flex-direction: column; align-items: center; text-align: center; color: #fff; }
                 
-                .matrix-legend { position: absolute; bottom: 25px; right: 25px; background: var(--surface); padding: 20px; border-radius: 20px; border: 1px solid var(--glass-border); width: 240px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-                .legend-title { font-size: 10px; color: var(--text-dim); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
-                .legend-items { display: flex; flex-direction: column; gap: 10px; }
-                .legend-item { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 500; }
-                .dot { width: 12px; height: 12px; border-radius: 4px; }
-                .dot.core { background: var(--primary); box-shadow: 0 0 10px var(--primary-glow); }
-                .dot.partner-sub { background: rgba(255, 255, 255, 0.1); border: 1px solid var(--glass-border); }
+                .hud-badge { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 10px; font-weight: 800; border: 1px solid var(--glass-border); backdrop-filter: blur(12px); text-transform: uppercase; letter-spacing: 1px; }
+                .hud-badge.active { background: rgba(255, 215, 0, 0.1); color: var(--primary); border-color: rgba(255, 215, 0, 0.2); }
+                .refresh-btn { background: rgba(255,255,255,0.05); color: #fff; cursor: pointer; transition: all 0.2s; }
+                .refresh-btn:hover { background: var(--primary); color: #000; border-color: var(--primary); }
+                
+
+                @media (max-width: 768px) {
+                    .hud-badge span { display: none; }
+                }
             `}</style>
         </div>
     )

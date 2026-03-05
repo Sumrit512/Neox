@@ -72,190 +72,142 @@ export default function DashboardPage() {
     query: { enabled: !!address }
   })
 
-  // THE ULTIMATE LOG FETCHING LOGIC - Infallible Join Detection
+  // BULLETPROOF RECURSIVE LOG SCANNING
   const fetchLogs = useCallback(async (isInitial = true) => {
-    if (!address || !publicClient) return
-    setLoadingLogs(true)
-    setLogError(null)
+    if (!address || !publicClient) return;
+    setLoadingLogs(true);
+    setLogError(null);
 
     try {
-      const latestBlock = await getBlockNumber(publicClient)
-      let startBlock;
-      let genesisLogs = []
+      const latestBlock = await getBlockNumber(publicClient);
 
-      const userRes = userData && Array.isArray(userData) ? userData : null
-      const joinTs = userRes ? BigInt(userRes[4]) : 0n
-      let estimatedJoinBlock = 0n
+      // STABLE SCAN: 1,000,000 blocks back in chunks of 5,000
+      const SCAN_DEPTH = 1000000n;
+      const CHUNK = 5000n;
 
-      if (joinTs > 0n) {
-        const nowTs = BigInt(Math.floor(Date.now() / 1000))
-        const secondsPassed = nowTs - joinTs
-        const blocksToLookBack = (secondsPassed / 3n) + 5000n // ~4 hours buffer
-        estimatedJoinBlock = latestBlock - blocksToLookBack > 0n ? latestBlock - blocksToLookBack : 0n
-      }
+      const targetBlock = latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n;
+      let currentTo = latestBlock;
+      let allRawLogs = [];
+      let joinFound = false;
 
-      if (isInitial) {
-        startBlock = latestBlock
-        if (isInitialLoad.current) setTransactions([])
+      const eventNames = ['Joined', 'Upgraded', 'Withdrawn', 'IncomeReceived'];
 
-        // THE ULTIMATE GENESIS SCAN: Recursive split on ANY error to ensure result
-        const findJoinRecursive = async (from, to, depth = 0) => {
-          try {
-            const joinedEvent = NEOX_ABI.find(x => x.name === 'Joined')
-            const logs = await getLogs(publicClient, {
-              address: NEOX_ADDRESS,
-              event: joinedEvent,
-              args: { user: address },
-              fromBlock: from,
-              toBlock: to
-            })
-            return logs
-          } catch (err) {
-            // Split if there's any error (Rate limit, Timeout, Range limit, Node crash)
-            if (depth < 10 && (to - from) > 50n) {
-              const mid = from + (to - from) / 2n
-              console.log(`[NeoX] Range Split [Depth ${depth}]: ${from}-${mid} and ${mid + 1n}-${to}`)
-              // Add small delay to prevent 429
-              await new Promise(r => setTimeout(r, depth * 50))
-              const [h1, h2] = await Promise.all([
-                findJoinRecursive(from, mid, depth + 1),
-                findJoinRecursive(mid + 1n, to, depth + 1)
-              ])
-              return [...h1, ...h2]
-            }
-            return []
-          }
-        }
-
-        if (joinTs > 0n) {
-          try {
-            console.log(`[NeoX] Triggering Bulletproof Deep Scan for User History...`)
-            // Huge window: 1 million blocks around joining timestamp
-            const searchRange = 500000n
-            const deepFrom = estimatedJoinBlock > searchRange ? estimatedJoinBlock - searchRange : 0n
-            const deepTo = estimatedJoinBlock + searchRange > latestBlock ? latestBlock : estimatedJoinBlock + searchRange
-
-            const logs = await findJoinRecursive(deepFrom, deepTo)
-
-            if (logs.length > 0) {
-              genesisLogs = logs.map(l => ({ ...l, eventName: 'Joined' }))
-              console.log(`[NeoX] DATA FOUND: Captured registration log at block ${logs[0].blockNumber}`)
-            } else {
-              // Final broad search from genesis - 2 million block window
-              console.log(`[NeoX] No results in primary window. Searching Genesis blocks...`)
-              const startLogs = await findJoinRecursive(0n, 1000000n)
-              genesisLogs = startLogs.map(l => ({ ...l, eventName: 'Joined' }))
-            }
-          } catch (e) {
-            console.error("[NeoX] Deep scan failed. ID Subscription will remain synthetic.", e)
-          }
-        }
-      } else {
-        startBlock = currentBlockCursor ? currentBlockCursor - 1n : latestBlock
-      }
-
-      const toBlockNumber = startBlock
-      const fromBlockNumber = toBlockNumber - CHUNK_SIZE > 0n ? toBlockNumber - CHUNK_SIZE : 0n
-
-      const eventNames = ['Joined', 'Upgraded', 'Withdrawn', 'IncomeReceived']
-
-      const fetchByEvent = async (name, from, to, depth = 0) => {
+      // RECURSIVE SCANNER: Splits ranges automatically if the node complains
+      const deepScan = async (name, from, to) => {
         try {
-          const eventObj = NEOX_ABI.find(x => x.name === name)
-          const params = { address: NEOX_ADDRESS, event: eventObj, fromBlock: from, toBlock: to }
-
-          if (name === 'Joined') {
-            // Only need to fetch Join events for the user (ID Subscription)
-            return await getLogs(publicClient, { ...params, args: { user: address } })
-          }
-
-          if (['Upgraded', 'Withdrawn', 'IncomeReceived'].includes(name)) {
-            // In these events, 'user' is always the recipient/actor
-            return await getLogs(publicClient, { ...params, args: { user: address } })
-          }
-
-          return await getLogs(publicClient, params)
+          const eventObj = NEOX_ABI.find(x => x.name === name);
+          const logs = await getLogs(publicClient, {
+            address: NEOX_ADDRESS,
+            event: eventObj,
+            args: { user: address },
+            fromBlock: from,
+            toBlock: to
+          });
+          if (name === 'Joined' && logs.length > 0) joinFound = true;
+          return logs;
         } catch (err) {
-          if (depth < 2 && (to - from) > 200n) {
-            const mid = from + (to - from) / 2n
+          if ((to - from) > 50n) {
+            const mid = from + (to - from) / 2n;
             const [h1, h2] = await Promise.all([
-              fetchByEvent(name, from, mid, depth + 1),
-              fetchByEvent(name, mid + 1n, to, depth + 1)
-            ])
-            return [...h1, ...h2]
+              deepScan(name, from, mid),
+              deepScan(name, mid + 1n, to)
+            ]);
+            return [...h1, ...h2];
           }
-          return []
+          return [];
         }
+      };
+
+      console.log(`[NeoX] Stable Sync Start: ${latestBlock} down to ${targetBlock}`);
+
+      // SEQUENTIAL CHUNK LOOP
+      while (currentTo > targetBlock && !joinFound) {
+        let currentFrom = currentTo > CHUNK ? currentTo - CHUNK : 0n;
+        if (currentFrom < targetBlock) currentFrom = targetBlock;
+
+        console.log(`[NeoX] Scanning Chunk: ${currentFrom} to ${currentTo}`);
+        const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
+        allRawLogs = [...allRawLogs, ...chunkResults.flat()];
+
+        currentTo = currentFrom - 1n;
+
+        // Optional: Small delay to let RPC breathe if needed
+        // await new Promise(r => setTimeout(r, 100));
       }
 
-      const logPromises = eventNames.map((name, idx) =>
-        new Promise(resolve => setTimeout(() => resolve(fetchByEvent(name, fromBlockNumber, toBlockNumber)), idx * 40))
-      )
+      const allRaw = allRawLogs;
 
-      const results = await Promise.all(logPromises)
-      const allRaw = [...genesisLogs, ...results.flat()]
+      // 3. FETCH UNIQUE BLOCK TIMESTAMPS (Controlled Batching)
+      const uniqueBlocks = [...new Set(allRaw.map(log => log.blockNumber))];
+      const blockTimestamps = new Map();
 
-      const userTarget = address.toLowerCase()
+      const batchSize = 10; // Smaller batches for stability
+      for (let i = 0; i < uniqueBlocks.length; i += batchSize) {
+        const batch = uniqueBlocks.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (bn) => {
+          try {
+            const block = await publicClient.getBlock({ blockNumber: bn });
+            blockTimestamps.set(bn, Number(block.timestamp) * 1000);
+          } catch (e) {
+            console.error(`[NeoX] Block timestamp fetch fail: ${bn}`, e);
+            blockTimestamps.set(bn, Date.now());
+          }
+        }));
+      }
+
       const formatted = allRaw.map(log => {
-        const { eventName, args } = log
-        const u = args.user?.toLowerCase()
-        const s = args.sponsor?.toLowerCase()
-
-        if (u !== userTarget && s !== userTarget) return null
-
-        let type = eventName
-        let amount = formatUnits(args.amount || 0n, 18)
-        let isPositive = true
+        const { eventName, args } = log;
+        let type = eventName;
+        let amount = formatUnits(args.amount || 0n, 18);
+        let isPositive = true;
 
         if (eventName === 'Joined') {
-          type = 'ID Subscription'
-          amount = '10'
-          isPositive = false
+          type = 'ID Subscription'; amount = '10'; isPositive = false;
         } else if (eventName === 'IncomeReceived') {
-          type = args.typeOfIncome || 'Network Income'
-          isPositive = true
+          type = args.typeOfIncome || 'Network Income'; isPositive = true;
         } else if (eventName === 'Upgraded') {
-          type = 'Injection'
-          isPositive = false
+          type = 'Injection'; isPositive = false;
         } else if (eventName === 'Withdrawn') {
-          type = 'Withdrawal'
-          isPositive = false
+          type = 'Withdrawal'; isPositive = false;
         }
-
-        const bDiff = Number(latestBlock - log.blockNumber)
-        const estTime = Date.now() - (bDiff * 3000)
 
         return {
-          type, amount, isPositive,
+          id: `${log.transactionHash}-${log.logIndex}`,
+          type,
+          amount,
+          isPositive,
           txHash: log.transactionHash,
           blockNumber: Number(log.blockNumber),
-          timestamp: estTime,
+          logIndex: log.logIndex,
+          timestamp: blockTimestamps.get(log.blockNumber) || Date.now(),
           isReal: true
-        }
-      }).filter(Boolean)
+        };
+      });
 
       setTransactions(prev => {
-        const combined = isInitial ? formatted : [...prev, ...formatted]
-        const sorted = combined.sort((a, b) => b.blockNumber - a.blockNumber || b.timestamp - a.timestamp)
-        // Ensure unique by hash, keeping the most relevant one
-        const uniqueMap = new Map()
-        sorted.forEach(tx => {
-          if (!uniqueMap.has(tx.txHash)) {
-            uniqueMap.set(tx.txHash, tx)
-          }
-        })
-        return Array.from(uniqueMap.values())
-      })
+        const combined = isInitial ? formatted : [...prev, ...formatted];
+        // SORT: Higher blocks first, then higher log index (order of appearance)
+        const sorted = combined.sort((a, b) => {
+          if (b.blockNumber !== a.blockNumber) return b.blockNumber - a.blockNumber;
+          return (b.logIndex || 0) - (a.logIndex || 0);
+        });
 
-      setCurrentBlockCursor(fromBlockNumber)
-      setCanLoadMore(fromBlockNumber > 0n)
+        const unique = new Map();
+        sorted.forEach(t => unique.set(t.id, t));
+        return Array.from(unique.values());
+      });
+
+      setCurrentBlockCursor(targetBlock);
+      setCanLoadMore(targetBlock > 0n);
+      if (isInitial) isInitialLoad.current = false;
 
     } catch (error) {
-      console.error('[NeoX] History Sync Error:', error)
+      console.error('[NeoX] History Sync Error:', error);
+      setLogError("Network sync timed out. Deep scanning paused.");
     } finally {
-      setLoadingLogs(false)
+      setLoadingLogs(false);
     }
-  }, [address, publicClient, currentBlockCursor, currentNetworkName, CHUNK_SIZE, userData])
+  }, [address, publicClient, currentBlockCursor, userData])
 
   // Sync Logic
   useEffect(() => {
@@ -413,6 +365,23 @@ export default function DashboardPage() {
     BigInt(pendingRoi?.[0] || 0n) +
     BigInt(pendingReward || 0n)
 
+  // FIX: Identify how much of 'pendingIncome' is actually settled ROI
+  const settledRoiInPending = useMemo(() => {
+    if (!transactions || transactions.length === 0) return 0n;
+
+    // Find latest withdrawal time to calculate current balance breakdown
+    const lastWithdrawal = [...transactions]
+      .filter(tx => tx.type === 'Withdrawal' && tx.isReal)
+      .sort((a, b) => b.timestamp - a.timestamp)[0];
+
+    const cutoff = lastWithdrawal ? lastWithdrawal.timestamp : 0;
+
+    // Sum ROI IncomeReceived logs after that cutoff
+    return transactions
+      .filter(tx => tx.isReal && tx.timestamp > cutoff && (tx.type === 'ROI' || tx.type.toLowerCase().includes('roi')))
+      .reduce((acc, tx) => acc + parseUnits(tx.amount || '0', 18), 0n);
+  }, [transactions]);
+
   const canHarvest = totalAccumulated >= parseUnits('1', 18)
 
   const filteredTransactions = useMemo(() => {
@@ -429,25 +398,29 @@ export default function DashboardPage() {
 
     const virtual = []
     const nowTs = BigInt(Math.floor(Date.now() / 1000))
-    const period = 300n // DAY_PERIOD
+    const period = 300n // 5 Mins
+
+    // Real logs are already processed in fetchLogs
+    const processedLogs = filteredTransactions
 
     if (isConnected && mounted) {
-      // 0. FALLBACK: Synthetic Join if real log is missing
+      // 2. Genesis record
       const hasRealJoin = transactions.some(tx => tx.type === 'ID Subscription' && tx.isReal)
       const joinTs = joinTimestamp ? BigInt(joinTimestamp) : 0n
-      if (!hasRealJoin && joinTs > 0n && !searchQuery) {
+      if (!hasRealJoin && joinTs > 0n) {
         virtual.push({
           txHash: null,
           type: 'ID Subscription',
           amount: '10',
           isPositive: false,
-          isVirtual: true, // Hide link for synthetic log
+          isVirtual: true,
+          id: 'v-genesis-join',
           timestamp: Number(joinTs) * 1000,
           subtext: 'Account Activation [Verified]'
         })
       }
 
-      // 1. Break down ROI Cycles
+      // 3. Current Live Accumulation (Virtual)
       const currentRoiEarned = totalRoiEarned || 0n
       const maxRoi = idValue * 2n
 
@@ -466,124 +439,73 @@ export default function DashboardPage() {
           if (amt > 0n) {
             virtual.push({
               id: `v-roi-cycle-${i}`,
-              type: 'ROI Accumulation (Cycle)',
+              type: 'ROI Accumulation (Live)',
               amount: formatUnits(amt, 18),
               isPositive: true,
               isVirtual: true,
               timestamp: (Number(lastRoiTimestamp) + Number(i * period)) * 1000,
-              subtext: `Automated yield: ${rate}%`
+              subtext: `Live Sync: ${rate}%/period`
             })
             cumulative += amt
           }
         }
       }
 
-      // 2. Break down BDI Cycles
-      if (lastBdiTimestamp && lastBdiTimestamp > 0n && currentBdiTier > 0n) {
-        const bdiRates = [0n, 10n * 10n ** 18n, 50n * 10n ** 18n, 100n * 10n ** 18n, 200n * 10n ** 18n]
-        const ratePerPeriod = bdiRates[Number(currentBdiTier)] || 0n
-        const bdiUntil = bdiEndTimestamp && bdiEndTimestamp < nowTs ? bdiEndTimestamp : nowTs
-        const elapsed = bdiUntil - lastBdiTimestamp
-        const periods = elapsed / period
-
-        for (let i = 1n; i <= periods; i++) {
-          virtual.push({
-            id: `v-bdi-cycle-${i}`,
-            type: 'BDI Growth (Cycle)',
-            amount: formatUnits(ratePerPeriod, 18),
-            isPositive: true,
-            isVirtual: true,
-            timestamp: (Number(lastBdiTimestamp) + Number(i * period)) * 1000,
-            subtext: `Tier ${currentBdiTier} Achievement`
-          })
-        }
-      }
-
-      // 3. Break down Matching Reward Cycles
-      if (lastRewardTimestamp && lastRewardTimestamp > 0n && isRewardActive) {
-        const rewardRate = 10n * 10n ** 18n // MATCHING_REWARD_AMOUNT
-        const rewardUntil = rewardEndTimestamp && rewardEndTimestamp < nowTs ? rewardEndTimestamp : nowTs
-        const elapsed = rewardUntil - lastRewardTimestamp
-        const periods = elapsed / period
-
-        for (let i = 1n; i <= periods; i++) {
-          virtual.push({
-            id: `v-reward-cycle-${i}`,
-            type: 'Team Reward (Cycle)',
-            amount: formatUnits(rewardRate, 18),
-            isPositive: true,
-            isVirtual: true,
-            timestamp: (Number(lastRewardTimestamp) + Number(i * period)) * 1000,
-            subtext: 'Genetic Matching Bonus'
-          })
-        }
-      }
-
-      // 4. Break down Direct ROI Income (Referral side)
-      if (referralDataResults && Array.isArray(referralDataResults)) {
-        referralDataResults.forEach((res, refIndex) => {
-          if (!res.result) return
-          const r = res.result
-          const ridVal = r[2]
-          const rlast = r[5]
-          const rb2 = r[10]
-          const rb4 = r[11]
-          const rearned = r[6]
-
-          if (!rlast || rlast === 0n || rlast >= nowTs) return
-          const elapsed = nowTs - rlast
-          const periods = elapsed / period
-          const rate = rb4 ? 4n : (rb2 ? 3n : 2n)
-          const perPeriod = (ridVal * rate) / 100n
-          let cumulative = rearned || 0n
-          const maxRoi = ridVal * 2n
-
-          for (let i = 1n; i <= periods; i++) {
-            let amt = perPeriod
-            if (cumulative + amt > maxRoi) {
-              amt = maxRoi > cumulative ? maxRoi - cumulative : 0n
-            }
-            if (amt > 0n) {
-              const commission = (amt * 5n) / 100n
-              if (commission > 0n) {
-                virtual.push({
-                  id: `v-direct-roi-${refIndex}-${i}`,
-                  type: 'Direct ROI Cycle (Sponsor)',
-                  amount: formatUnits(commission, 18),
-                  isPositive: true,
-                  isVirtual: true,
-                  timestamp: (Number(rlast) + Number(i * period)) * 1000,
-                  subtext: '5% of referral accumulation'
-                })
-              }
-              cumulative += amt
-            }
-          }
+      // 4. Detailed "Held" Rewards Breakdown
+      // Instead of one big bar, we show individual pending rewards
+      if (pendingRoi && pendingRoi[0] > 0n) {
+        virtual.push({
+          id: 'v-pending-roi',
+          type: 'ROI Accumulated (Held)',
+          amount: formatUnits(pendingRoi[0], 18),
+          isPositive: true,
+          isVirtual: true,
+          timestamp: Date.now() + 500,
+          subtext: 'Stored in vault, ready to harvest'
         })
       }
-
-      // 5. Bonus Credits (Held) - These are already settled in the contract pendingIncome
       if (pendingIncome && pendingIncome > 0n) {
         virtual.push({
-          id: 'v-bonus-held',
+          id: 'v-pending-income',
           type: 'Network Bonus (Held)',
           amount: formatUnits(pendingIncome, 18),
           isPositive: true,
           isVirtual: true,
-          timestamp: Date.now(),
-          subtext: 'Direct/Upline/Downline'
+          timestamp: Date.now() + 400,
+          subtext: 'Direct/Upline/Team rewards'
+        })
+      }
+      if (pendingBdi && pendingBdi > 0n) {
+        virtual.push({
+          id: 'v-pending-bdi',
+          type: 'BDI Growth (Held)',
+          amount: formatUnits(pendingBdi, 18),
+          isPositive: true,
+          isVirtual: true,
+          timestamp: Date.now() + 300,
+          subtext: 'Network achievement bonus'
+        })
+      }
+      if (pendingReward && pendingReward > 0n) {
+        virtual.push({
+          id: 'v-pending-match',
+          type: 'Team Reward (Held)',
+          amount: formatUnits(pendingReward, 18),
+          isPositive: true,
+          isVirtual: true,
+          timestamp: Date.now() + 200,
+          subtext: 'Matching reward bonus'
         })
       }
     }
 
-    // Sort all including virtual by timestamp DESC
-    const combined = [...virtual, ...filteredTransactions]
+    const combined = [...virtual, ...processedLogs]
     return combined.sort((a, b) => b.timestamp - a.timestamp)
   }, [filteredTransactions, pendingRoi, pendingBdi, pendingReward, pendingIncome, liveDirectRoi,
     lastRoiTimestamp, idValue, isBoosted2, isBoosted4, totalRoiEarned,
     lastBdiTimestamp, currentBdiTier, bdiEndTimestamp,
     lastRewardTimestamp, isRewardActive, rewardEndTimestamp,
-    referralDataResults, isConnected, mounted, searchQuery])
+    referralDataResults, isConnected, mounted, searchQuery, transactions, joinTimestamp])
 
   const paginatedTransactions = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
@@ -717,17 +639,17 @@ export default function DashboardPage() {
         </header>
 
         {activeTab === 'logs' ? (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="neo-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', flexWrap: 'wrap', gap: '20px' }}>
-              <div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="neo-card logs-card-section">
+            <div className="logs-header-wrap">
+              <div className="logs-title-area">
                 <h3 className="section-title"><History size={20} /> On-Chain Explorer</h3>
-                <p style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '4px' }}>
+                <p className="logs-subtitle">
                   Verified transactions directly from the <b>Binance Smart Chain</b>.
                 </p>
               </div>
 
-              <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                <div className="search-group">
+              <div className="logs-actions-area">
+                <div className="search-group logs-search">
                   <Search size={16} className="search-icon" />
                   <input
                     type="text"
@@ -737,9 +659,9 @@ export default function DashboardPage() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
-                <button className="btn-primary" style={{ padding: '10px 20px', fontSize: '13px' }} onClick={() => fetchLogs(true)} disabled={loadingLogs}>
-                  <RefreshCw size={16} className={loadingLogs ? 'animate-spin' : ''} style={{ marginRight: '8px' }} />
-                  {loadingLogs ? 'Syncing...' : 'Sync Logs'}
+                <button className="btn-primary logs-sync-btn" onClick={() => fetchLogs(true)} disabled={loadingLogs}>
+                  <RefreshCw size={16} className={loadingLogs ? 'animate-spin' : ''} />
+                  <span>{loadingLogs ? 'Syncing...' : 'Sync Logs'}</span>
                 </button>
               </div>
             </div>
@@ -775,7 +697,7 @@ export default function DashboardPage() {
                       <tbody>
                         {paginatedTransactions.map((tx, i) => (
                           <motion.tr
-                            key={tx.isVirtual ? `virtual-${tx.id}` : `${tx.txHash}-${tx.logIndex}`}
+                            key={tx.id}
                             initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: i * 0.05 }}
@@ -790,7 +712,7 @@ export default function DashboardPage() {
                                     {tx.type}
                                     {tx.isVirtual && <span className="badge-live-tiny" style={{ marginLeft: '8px', fontSize: '9px', background: 'var(--primary)', color: '#000', padding: '2px 6px', borderRadius: '4px', fontWeight: '800' }}>LIVE</span>}
                                   </div>
-                                  <div className="table-subtext">{tx.isVirtual ? tx.subtext : `Hash: ${tx.txHash.slice(0, 10)}...${tx.txHash.slice(-8)}`}</div>
+                                  <div className="table-subtext">{tx.subtext || (tx.txHash ? `Hash: ${tx.txHash.slice(0, 10)}...${tx.txHash.slice(-8)}` : 'Verified On-Chain')}</div>
                                 </div>
                               </div>
                             </td>
@@ -801,8 +723,12 @@ export default function DashboardPage() {
                             </td>
                             <td>
                               <div className="table-time">
-                                <div>{new Date(tx.timestamp).toLocaleDateString()}</div>
-                                <div style={{ fontSize: '11px', opacity: 0.6 }}>{new Date(tx.timestamp).toLocaleTimeString()}</div>
+                                <div style={{ fontWeight: '600' }}>
+                                  {new Date(tx.timestamp).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })}
+                                </div>
+                                <div style={{ fontSize: '11px', opacity: 0.7, color: 'var(--primary)' }}>
+                                  {new Date(tx.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
+                                </div>
                               </div>
                             </td>
                             <td>
@@ -829,7 +755,7 @@ export default function DashboardPage() {
                   <div className="mobile-logs-list">
                     {paginatedTransactions.map((tx, i) => (
                       <motion.div
-                        key={`mob-${tx.isVirtual ? tx.id : tx.txHash}`}
+                        key={`mob-${tx.id}`}
                         className="mobile-log-card"
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -847,7 +773,16 @@ export default function DashboardPage() {
                           </div>
                         </div>
                         <div className="m-log-meta">
-                          <span>{new Date(tx.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                          <span style={{ color: 'var(--primary)', fontWeight: '600' }}>
+                            {new Date(tx.timestamp).toLocaleString('en-IN', {
+                              timeZone: 'Asia/Kolkata',
+                              day: '2-digit',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true
+                            })}
+                          </span>
                           {!tx.isVirtual && (
                             <a href={`${isBscTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com'}/tx/${tx.txHash}`} target="_blank" className="table-link">
                               Explorer <Globe size={12} />
@@ -898,18 +833,7 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {canLoadMore && (
-                    <div style={{ marginTop: '30px', display: 'flex', justifyContent: 'center' }}>
-                      <button
-                        className="btn-secondary load-more-btn"
-                        style={{ width: '200px' }}
-                        onClick={() => fetchLogs(false)}
-                        disabled={loadingLogs}
-                      >
-                        {loadingLogs ? <Loader2 className="animate-spin" size={20} /> : <><ChevronDown size={18} /> Load Deep History</>}
-                      </button>
-                    </div>
-                  )}
+                  {/* Pagination Controls moved/handled above */}
                 </>
               ) : (
                 <div className="empty-state">
@@ -933,18 +857,29 @@ export default function DashboardPage() {
         ) : (
           <>
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-              <StatCard title="Accumulated ROI" value={`${parseFloat(formatUnits(pendingRoi?.[0] || 0n, 18)).toFixed(4)} USDT`} icon={TrendingUp} color="var(--primary)" delay={0.1} />
-              <StatCard title="Life-to-Date ROI" value={`${parseFloat(formatUnits(totalRoiEarned || 0n, 18)).toFixed(4)} USDT`} icon={History} color="var(--text-dim)" delay={0.15} />
-              <StatCard title="Direct Income" value={`${parseFloat(formatUnits(pendingIncome || 0n, 18)).toFixed(4)} USDT`} icon={UserPlus} color="#FF8C00" delay={0.2} />
+              <StatCard title="Accumulated ROI" value={`${parseFloat(formatUnits(BigInt(pendingRoi?.[0] || 0n) + settledRoiInPending, 18)).toFixed(4)} USDT`} icon={TrendingUp} color="var(--primary)" delay={0.1} />
+              {/* <StatCard title="Life-to-Date ROI" value={`${parseFloat(formatUnits(totalRoiEarned || 0n, 18)).toFixed(4)} USDT`} icon={History} color="var(--text-dim)" delay={0.15} /> */}
+              <StatCard title="Direct Income" value={`${parseFloat(formatUnits((pendingIncome || 0n) - settledRoiInPending, 18)).toFixed(4)} USDT`} icon={UserPlus} color="#FF8C00" delay={0.2} />
               <StatCard title="Direct ROI (Live)" value={`${parseFloat(formatUnits(liveDirectRoi || 0n, 18)).toFixed(4)} USDT`} icon={Activity} color="#00E5FF" delay={0.25} />
               <StatCard title="Network BDI" value={`${parseFloat(formatUnits((totalBdiEarned || 0n) + (pendingBdi || 0n), 18)).toFixed(4)} USDT`} icon={Zap} color="var(--accent)" delay={0.3} />
               <StatCard title="Team Reward" value={`${parseFloat(formatUnits(pendingReward || 0n, 18)).toFixed(4)} USDT`} icon={Users} color="#00FF7F" delay={0.4} />
             </div>
 
-            <div className="main-dashboard-grid">
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className="neo-card">
+            <div className={activeTab === 'network' ? "network-view-container" : "main-dashboard-grid"}>
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className={`neo-card ${activeTab === 'network' ? 'network-card-expanded' : ''}`}>
                 {activeTab === 'network' ? (
-                  <div style={{ height: '600px' }}><h3 className="section-title"><Network size={20} /> Genetic Matrix</h3><NeoXTree /></div>
+                  <div className="network-flow-wrapper">
+                    <div className="section-header">
+                      <h3 className="section-title"><Network size={20} /> Genetic Matrix</h3>
+                      <div className="network-status">
+                        <div className="pulse-dot"></div>
+                        <span>LIVE ON-CHAIN VISUALIZATION</span>
+                      </div>
+                    </div>
+                    <div className="tree-container">
+                      <NeoXTree />
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <div className="section-header">
@@ -983,16 +918,18 @@ export default function DashboardPage() {
                 )}
               </motion.div>
 
-              <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.6 }} className="neo-card">
-                <h3 className="section-title"><Info size={20} /> Account Identity</h3>
-                <div className="data-rows">
-                  <div className="data-row"><span>Account Stake</span><span>{formatUnits(idValue || 0n, 18)} USDT</span></div>
-                  <div className="data-row"><span>Business Value</span><span>{formatUnits(businessValue || 0n, 18)} USDT</span></div>
-                  <div className="data-row"><span>Total Injected</span><span>{formatUnits(totalDeposited || 0n, 18)} USDT</span></div>
-                  <div className="data-row"><span>Creation Block</span><span>{joinTimestamp ? new Date(Number(joinTimestamp) * 1000).toLocaleDateString() : 'N/A'}</span></div>
-                  <div className="data-row"><span>Booster Tier</span><span className="tier-tag">{isBoosted4 ? 'ELITE 4%' : isBoosted2 ? 'TURBO 3%' : 'CORE 2%'}</span></div>
-                </div>
-              </motion.div>
+              {activeTab !== 'network' && (
+                <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.6 }} className="neo-card">
+                  <h3 className="section-title"><Info size={20} /> Account Identity</h3>
+                  <div className="data-rows">
+                    <div className="data-row"><span>Account Stake</span><span>{formatUnits(idValue || 0n, 18)} USDT</span></div>
+                    <div className="data-row"><span>Business Value</span><span>{formatUnits(businessValue || 0n, 18)} USDT</span></div>
+                    <div className="data-row"><span>Total Injected</span><span>{formatUnits(totalDeposited || 0n, 18)} USDT</span></div>
+                    <div className="data-row"><span>Creation Date</span><span>{joinTimestamp ? new Date(Number(joinTimestamp) * 1000).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}</span></div>
+                    <div className="data-row"><span>Booster Tier</span><span className="tier-tag">{isBoosted4 ? 'ELITE 4%' : isBoosted2 ? 'TURBO 3%' : 'CORE 2%'}</span></div>
+                  </div>
+                </motion.div>
+              )}
             </div>
           </>
         )}
@@ -1030,69 +967,183 @@ export default function DashboardPage() {
           </div>
         )}
       </AnimatePresence>
-
       <style jsx>{`
-        .active-tab { background: var(--glass) !important; color: var(--primary) !important; border-color: var(--primary) !important; }
-        .network-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: white; font-weight: 700; background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 20px; border: 1px solid var(--glass-border); }
-        .warning-tag { padding: 8px 15px; background: rgba(255,165,0,0.1) !important; border: 1px solid rgba(255,165,0,0.3) !important; color: orange; font-size: 11px; display: flex; align-items: center; gap: 8px; }
+        .network-view-container { width: 100%; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        .network-card-expanded { min-height: calc(100vh - 280px); padding: 0 !important; overflow: hidden; display: flex; flex-direction: column; background: rgba(5, 10, 24, 0.4) !important; }
+        .network-flow-wrapper { flex: 1; display: flex; flex-direction: column; padding: clamp(15px, 3vw, 24px); position: relative; }
+        .tree-container { flex: 1; min-height: 500px; border-radius: 20px; overflow: hidden; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.4); box-shadow: inset 0 0 50px rgba(0,0,0,0.5); }
         
-        .dashboard-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; gap: 30px; flex-wrap: wrap; }
-        .dashboard-title { font-size: 32px; margin-bottom: 10px; }
-        .account-meta { display: flex; align-items: center; gap: 12px; }
-        .meta-separator { width: 4px; height: 4px; borderRadius: 50%; background: var(--glass-border); }
-        .account-address { color: var(--text-dim); fontSize: 12px; }
-        .account-address span { color: white; }
-        
-        .tab-navigation { display: flex; gap: 12px; margin-bottom: 25px; overflow-x: auto; padding-bottom: 10px; -ms-overflow-style: none; scrollbar-width: none; }
-        .tab-navigation::-webkit-scrollbar { display: none; }
-        .tab-btn { flex-shrink: 0; white-space: nowrap; font-size: 13px; padding: 10px 18px; }
-        
-        .header-actions { display: flex; gap: 15px; align-items: flex-start; }
-        .harvest-control { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-        .min-harvest-hint { font-size: 10px; color: var(--text-dim); background: rgba(255,255,255,0.05); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--glass-border); }
+        .active-tab { background: var(--glass) !important; color: var(--primary) !important; border-color: var(--primary) !important; box-shadow: 0 0 20px rgba(255, 215, 0, 0.1); }
+        .network-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--primary); font-weight: 800; background: rgba(255,215,0,0.05); padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(255,215,0,0.2); backdrop-filter: blur(10px); }
+        .pulse-dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; box-shadow: 0 0 10px var(--primary); animation: pulse-anim 2s infinite; }
+        @keyframes pulse-anim { 0% { transform: scale(0.9); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.5; } 100% { transform: scale(0.9); opacity: 1; } }
 
-        .search-group { position: relative; width: 220px; }
-        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); }
-        .search-input { padding-left: 36px !important; font-size: 12px !important; border-radius: 12px !important; height: 40px; }
-        .modal-overlay { position: fixed; inset: 0; background: rgba(5, 10, 24, 0.95); backdrop-filter: blur(15px); display: flex; align-items: center; justify-content: center; z-index: 2000; }
-        .modal-card { width: 100%; max-width: 440px; border: 1px solid var(--glass-border); padding: 35px; }
-        .modal-header { display: flex; justify-content: space-between; margin-bottom: 25px; }
-        .input-glow-group { background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); border-radius: 16px; padding: 18px; display: flex; align-items: center; margin-bottom: 30px; }
-        .input-glow-group input { background: transparent; border: none; color: white; flex: 1; outline: none; font-size: 20px; font-weight: 800; }
+        .dashboard-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; gap: 30px; flex-wrap: wrap; }
+        .dashboard-title { font-size: clamp(24px, 4vw, 32px); font-weight: 900; letter-spacing: -1px; }
+        .account-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .meta-separator { width: 4px; height: 4px; border-radius: 50%; background: var(--glass-border); }
+        .account-address { color: var(--text-dim); font-size: 12px; word-break: break-all; font-family: 'JetBrains Mono', monospace; }
+        .account-address span { color: white; border-bottom: 1px dashed rgba(255,255,255,0.2); }
         
-        @media (max-width: 768px) {
-          .dashboard-header { flex-direction: column; align-items: stretch; gap: 20px; }
-          .header-actions { flex-direction: column; align-items: stretch; }
-          .harvest-control { align-items: stretch; }
-          .harvest-btn, .upgrade-btn { width: 100%; }
-          .dashboard-title { font-size: 26px; }
+        .tab-navigation { 
+          display: flex; 
+          gap: 10px; 
+          margin-bottom: 30px; 
+          overflow-x: auto; 
+          padding-bottom: 12px;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+          width: 100%;
+        }
+        .tab-navigation::-webkit-scrollbar { display: none; }
+        .tab-btn { 
+          flex-shrink: 0; 
+          white-space: nowrap; 
+          font-size: 13px; 
+          font-weight: 700; 
+          padding: 10px 20px; 
+          border-radius: 12px;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .header-actions { display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap; }
+        .harvest-control { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+        .min-harvest-hint { font-size: 10px; color: var(--text-dim); background: rgba(255,255,255,0.05); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--glass-border); letter-spacing: 0.5px; }
+
+        .search-group { position: relative; width: 100%; max-width: 240px; }
+        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); }
+        .search-input { padding-left: 40px !important; font-size: 13px !important; border-radius: 14px !important; height: 44px; background: rgba(255,255,255,0.03) !important; border-color: var(--glass-border) !important; }
+        .search-input:focus { border-color: var(--primary) !important; box-shadow: 0 0 15px rgba(255, 215, 0, 0.05) !important; }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(5, 10, 24, 0.8); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 20px; overflow-y: auto; }
+        .modal-card { width: 100%; max-width: 440px; border: 1px solid var(--glass-border); padding: clamp(24px, 5vw, 40px); background: var(--surface) !important; box-shadow: 0 30px 60px rgba(0,0,0,0.5); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .modal-desc { color: var(--text-dim); font-size: 14px; margin-bottom: 25px; line-height: 1.6; text-align: center; }
+        .input-glow-group { background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: 16px; padding: 20px; display: flex; align-items: center; margin-bottom: 30px; transition: all 0.3s; }
+        .input-glow-group:focus-within { border-color: var(--primary); box-shadow: 0 0 20px rgba(255, 215, 0, 0.1); }
+        .input-glow-group input { background: transparent; border: none; color: white; flex: 1; outline: none; font-size: 24px; font-weight: 800; width: 100%; text-align: center; font-family: 'JetBrains Mono', monospace; }
+        .input-unit { color: var(--primary); font-weight: 800; font-size: 14px; margin-left: 10px; }
+        
+        .success-state-modal { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        .success-check { color: #00FF7F; background: rgba(0, 255, 127, 0.1); width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+
+        @media (max-width: 1200px) {
+          .dashboard-header { gap: 20px; }
+          .stats-grid { grid-template-columns: repeat(3, 1fr); }
         }
 
-        .log-item { background: rgba(255,255,255,0.01) !important; padding: 16px !important; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--glass-border) !important; margin-bottom: 2px; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .log-item:hover { background: rgba(255,255,255,0.03) !important; border-color: var(--primary) !important; transform: translateY(-2px); box-shadow: 0 10px 40px rgba(255, 215, 0, 0.05); }
-        .clickable-log:active { transform: scale(0.98); }
-        .log-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
-        .log-icon.deposit { background: rgba(0,255,127,0.08); color: #00FF7F; }
-        .log-icon.withdraw { background: rgba(255,68,68,0.08); color: #ff4444; }
-        .log-icon.virtual { background: rgba(255,215,0,0.1); color: var(--primary); }
-        .badge-live { font-size: 8px; background: rgba(255,215,0,0.1); color: var(--primary); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255,215,0,0.2); font-weight: 800; }
-        .virtual-log { cursor: default; }
-        .virtual-log:hover { transform: none !important; }
-        .log-amount { font-size: 18px; font-weight: 900; }
-        .log-amount.pos { color: #00FF7F; }
-        .log-amount.neg { color: #ff4444; }
-        .log-hash { font-size: 10px; color: var(--text-dim); opacity: 0.7; margin-top: 3px; font-family: monospace; }
-        .empty-state { padding: 80px 20px; text-align: center; }
-        .empty-icon-box { margin-bottom: 20px; }
-        .loader-ring { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 15px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .pulse { animation: pulse-anim 2s infinite; }
-        @keyframes pulse-anim { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-        .tier-tag { color: var(--primary); font-weight: 900; letter-spacing: 1px; }
-        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 35px; }
-        .yield-display { min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; padding: 20px; }
-        .yield-orb { width: 100px; height: 100px; background: radial-gradient(circle, var(--primary) 0%, transparent 70%); position: absolute; opacity: 0.1; filter: blur(20px); animation: pulse-anim 4s infinite; }
+        @media (max-width: 1024px) {
+          .network-card-expanded { min-height: 600px; }
+          .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 768px) {
+          .main-content { padding-top: 100px; }
+          .dashboard-header { flex-direction: column; align-items: stretch; gap: 25px; margin-bottom: 30px; }
+          .header-info { text-align: center; display: flex; flex-direction: column; align-items: center; }
+          .header-actions { flex-direction: column; align-items: stretch; width: 100%; gap: 12px; }
+          .harvest-control { align-items: stretch; width: 100%; }
+          .harvest-btn, .upgrade-btn { width: 100%; justify-content: center; height: 50px; font-size: 14px; }
+          .account-meta { justify-content: center; width: 100%; }
+          .meta-separator { display: none; }
+          .account-address { width: 100%; background: rgba(5, 10, 24, 0.3); padding: 12px; border-radius: 12px; border: 1px solid var(--glass-border); font-size: 11px; }
+          .tree-container { min-height: 400px; }
+          .search-group { max-width: 100%; }
+          .tab-navigation { justify-content: center; padding-bottom: 5px; margin-bottom: 20px; }
+          .tab-btn { padding: 8px 16px; font-size: 12px; }
+          .stats-grid { grid-template-columns: 1fr; gap: 12px; }
+        }
+
+        @media (max-width: 480px) {
+          .stat-value { font-size: 20px; }
+          .neo-card { padding: 18px; }
+          .section-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+          .rate-badge { width: 100%; justify-content: center; padding: 6px 12px; }
+          .network-card-expanded { min-height: 400px; }
+        }
+
+        .data-rows { display: flex; flex-direction: column; gap: 5px; }
+        .tier-tag { color: var(--primary); font-weight: 900; letter-spacing: 1px; text-shadow: 0 0 10px var(--primary-glow); }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .yield-display { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; padding: 20px; text-align: center; }
+        .yield-orb { width: 120px; height: 120px; background: radial-gradient(circle, var(--primary) 0%, transparent 70%); position: absolute; opacity: 0.1; filter: blur(30px); animation: pulse-anim 4s infinite; }
         .full-width { width: 100%; }
+        .rate-badge { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; padding: 8px 16px; border-radius: 12px; background: var(--glass); border: 1px solid var(--glass-border); }
+
+        /* Transactions Table & Activity Section */
+        .transactions-table-container { width: 100%; overflow-x: auto; margin-top: 10px; border-radius: 16px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border); -ms-overflow-style: none; scrollbar-width: none; }
+        .transactions-table-container::-webkit-scrollbar { display: none; }
+        .transactions-table { width: 100%; border-collapse: collapse; text-align: left; min-width: 800px; }
+        .transactions-table th { padding: 18px 24px; background: rgba(255, 255, 255, 0.02); color: var(--text-dim); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 2px solid var(--glass-border); }
+        .transactions-table td { padding: 18px 24px; border-bottom: 1px solid var(--glass-border); vertical-align: middle; }
+        .transactions-table tr:last-child td { border-bottom: none; }
+        .transactions-table tr { transition: all 0.2s; }
+        .transactions-table tr:hover { background: rgba(255, 255, 255, 0.03); }
+
+        .table-type-cell { display: flex; align-items: center; gap: 15px; }
+        .table-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .table-icon.deposit { background: rgba(0, 255, 127, 0.1); color: #00FF7F; border: 1px solid rgba(0, 255, 127, 0.2); }
+        .table-icon.withdraw { background: rgba(255, 68, 68, 0.1); color: #ff4444; border: 1px solid rgba(255, 68, 68, 0.2); }
+        .table-icon.virtual { background: rgba(255, 215, 0, 0.1); color: var(--primary); border: 1px solid rgba(255, 215, 0, 0.2); }
+
+        .table-type-text { font-weight: 800; color: var(--text); font-size: 14px; display: flex; align-items: center; }
+        .table-subtext { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-family: 'JetBrains Mono', monospace; opacity: 0.7; }
+        .table-amount { font-weight: 900; font-size: 16px; font-family: 'JetBrains Mono', monospace; }
+        .table-amount.pos { color: #00FF7F; }
+        .table-amount.neg { color: #ff4444; }
+        .table-time { font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+        .table-link { color: var(--primary); text-decoration: none; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; padding: 6px 12px; background: rgba(255, 215, 0, 0.05); border-radius: 8px; border: 1px solid rgba(255, 215, 0, 0.1); }
+        .table-link:hover { background: var(--primary); color: #000; box-shadow: 0 0 15px var(--primary-glow); }
+
+        .mobile-logs-list { display: none; flex-direction: column; gap: 12px; margin-top: 10px; }
+        .mobile-log-card { background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); border-radius: 18px; padding: 20px; transition: all 0.3s; }
+        .mobile-log-card:active { transform: scale(0.98); background: rgba(255,255,255,0.04); }
+        .m-log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .m-log-type { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 15px; }
+        .m-log-amount { font-weight: 900; font-size: 18px; font-family: 'JetBrains Mono', monospace; }
+        .m-log-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--glass-border); padding-top: 12px; }
+
+        .pagination-controls { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 35px; flex-wrap: wrap; }
+        .pg-btn { min-width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); color: var(--text); cursor: pointer; transition: all 0.2s; font-weight: 700; font-size: 13px; padding: 0 10px; }
+        .pg-btn:hover:not(:disabled) { background: var(--primary); color: #000; border-color: var(--primary); box-shadow: 0 0 20px var(--primary-glow); }
+        .pg-btn.active { background: var(--primary); color: #000; border-color: var(--primary); box-shadow: 0 0 20px var(--primary-glow); }
+        .pg-btn:disabled { opacity: 0.2; cursor: not-allowed; }
+        .pg-arrow { padding: 0 18px; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+
+        @media (max-width: 900px) {
+          .transactions-table th:nth-child(4), .transactions-table td:nth-child(4) { display: none; }
+        }
+
+        .logs-card-section { padding: clamp(15px, 4vw, 30px) !important; min-height: 400px; }
+        .logs-header-wrap { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; gap: 20px; flex-wrap: wrap; }
+        .logs-subtitle { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+        .logs-actions-area { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .logs-search { min-width: 200px; flex: 1; }
+        .logs-sync-btn { padding: 0 15px; height: 42px; display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+
+        @media (max-width: 768px) {
+          .logs-header-wrap { flex-direction: column; align-items: stretch; text-align: center; gap: 20px; }
+          .logs-actions-area { flex-direction: column; align-items: stretch; width: 100%; }
+          .logs-search { min-width: 100%; }
+          .logs-sync-btn { justify-content: center; width: 100%; }
+          .logs-title-area { display: flex; flex-direction: column; align-items: center; }
+          
+          .transactions-table-container { display: none !important; }
+          .mobile-logs-list { display: flex !important; flex-direction: column; gap: 15px; width: 100%; margin-top: 10px; }
+          .mobile-log-card { 
+            display: block !important;
+            background: rgba(255, 255, 255, 0.04) !important; 
+            border: 1px solid var(--glass-border) !important; 
+            border-radius: 20px; 
+            padding: 18px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
+          }
+          .m-log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; width: 100%; }
+          .m-log-type { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 14px; }
+          .m-log-amount { font-weight: 900; font-size: 16px; font-family: 'JetBrains Mono', monospace; }
+          .m-log-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px; width: 100%; }
+        }
       `}</style>
     </div>
   )
