@@ -47,11 +47,18 @@ contract NeoX {
         uint256 rewardEndTimestamp;
         uint256 totalRewardEarned;
         bool isRewardActive;
+        uint256 totalDirectEarned;
+        uint256 totalQualifiedDirects; // For BDI (No time limit)
+        uint256 boosterQualifiedDirects; // For Booster (20 min limit)
+        bool isQualified100; // Has reached 100 USDT anytime
+        bool isQualifiedBooster; // Reached 100 USDT within sponsor's window
+        uint256 totalCappedIncome; // ROI + Direct + Upline + Downline (Capped at 4x stake)
     }
     
     mapping(address => User) public users;
     mapping(address => bool) public specialUsers;
     mapping(address => mapping(address => uint256)) public legBusiness; // [user][referral] => business
+    mapping(address => uint256[11]) public levelUnlockTimestamps; // [user][level] => timestamp
     address[] public allUsers;
     
     // BDI Tiers
@@ -68,6 +75,8 @@ contract NeoX {
     event Upgraded(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
     event IncomeReceived(address indexed user, address indexed from, uint256 amount, string typeOfIncome);
+    event QualifiedDirectAdded(address indexed sponsor, address indexed referral);
+    event BoosterActivated(address indexed user, uint256 level);
 
     constructor(address _rootUser, address _usdt, address[] memory _specialUsers) {
         owner = msg.sender;
@@ -83,8 +92,12 @@ contract NeoX {
         
         // Special Users mapping
         for(uint i=0; i<_specialUsers.length; i++) {
-            specialUsers[_specialUsers[i]] = true;
-            // TODO: Implement special privileges for these users (e.g., fee waivers, higher ROI, etc.)
+            address sUser = _specialUsers[i];
+            specialUsers[sUser] = true;
+            // Special users are pre-qualified for all levels from start
+            for(uint8 j=1; j<=10; j++) {
+                levelUnlockTimestamps[sUser][j] = block.timestamp;
+            }
         }
     }
 
@@ -115,14 +128,20 @@ contract NeoX {
         users[_sponsor].referrals.push(msg.sender);
         
         _updateBusinessValue(msg.sender, JOIN_FEE);
+        _updateQualifiedStatus(msg.sender);
         checkBoostStatus(_sponsor); // Trigger booster check
         _settleBdi(_sponsor);
 
         // 5% Direct Income immediately to sponsor
         uint256 directIncome = (JOIN_FEE * DIRECT_INCOME_PCT) / 100;
-        usdt.transfer(_sponsor, directIncome);
+        uint256 cappedDirect = _applyGlobalCap(_sponsor, directIncome);
+        if (cappedDirect > 0) {
+            usdt.transfer(_sponsor, cappedDirect);
+            users[_sponsor].totalDirectEarned += cappedDirect;
+            users[_sponsor].totalCappedIncome += cappedDirect;
+            emit IncomeReceived(_sponsor, msg.sender, cappedDirect, "Direct Income");
+        }
         
-        emit IncomeReceived(_sponsor, msg.sender, directIncome, "Direct Income");
         emit Joined(msg.sender, _sponsor);
     }
 
@@ -140,13 +159,20 @@ contract NeoX {
         users[msg.sender].totalDeposited += _amount;
         
         _updateBusinessValue(msg.sender, _amount);
+        _updateQualifiedStatus(msg.sender);
+        checkBoostStatus(msg.sender);
         
         // 5% Direct Upgrade Income to sponsor
         address sponsor = users[msg.sender].sponsor;
         if (sponsor != address(0)) {
             uint256 upgradeIncome = (_amount * DIRECT_INCOME_PCT) / 100;
-            users[sponsor].pendingIncome += upgradeIncome;
-            emit IncomeReceived(sponsor, msg.sender, upgradeIncome, "Direct Upgrade Income");
+            uint256 cappedUpgrade = _applyGlobalCap(sponsor, upgradeIncome);
+            if (cappedUpgrade > 0) {
+                usdt.transfer(sponsor, cappedUpgrade);
+                users[sponsor].totalDirectEarned += cappedUpgrade;
+                users[sponsor].totalCappedIncome += cappedUpgrade;
+                emit IncomeReceived(sponsor, msg.sender, cappedUpgrade, "Direct Upgrade Income");
+            }
         }
         
         emit Upgraded(msg.sender, _amount);
@@ -154,18 +180,53 @@ contract NeoX {
 
     function checkBoostStatus(address _user) public {
         User storage u = users[_user];
+        // Condition: User must have at least 100 USDT deposited
+        if (u.idValue < 100 * 1e18) return;
+        
         if (block.timestamp <= u.joinTimestamp + BOOST_WINDOW) {
-            if (u.directReferrals >= 4 && !u.isBoosted4) {
+            if (u.boosterQualifiedDirects >= 4 && !u.isBoosted4) {
                 // Settle pending earnings at OLD rate before boosting
                 _settleRoi(_user);
                 _settleBdi(_user);
                 u.isBoosted4 = true;
                 u.isBoosted2 = false;
-            } else if (u.directReferrals >= 2 && !u.isBoosted4 && !u.isBoosted2) {
+                emit BoosterActivated(_user, 4);
+            } else if (u.boosterQualifiedDirects >= 2 && !u.isBoosted4 && !u.isBoosted2) {
                 // Settle pending earnings at OLD rate before boosting
                 _settleRoi(_user);
                 _settleBdi(_user);
                 u.isBoosted2 = true;
+                emit BoosterActivated(_user, 2);
+            }
+        }
+    }
+
+    function _updateQualifiedStatus(address _user) internal {
+        User storage u = users[_user];
+        address sponsor = u.sponsor;
+        
+        if (u.idValue >= 100 * 1e18) {
+            // 1. Permanent BDI Qualification
+            if (!u.isQualified100) {
+                u.isQualified100 = true;
+                if (sponsor != address(0)) {
+                    users[sponsor].totalQualifiedDirects++;
+                    uint256 qCount = users[sponsor].totalQualifiedDirects;
+                    if (qCount <= 10 && levelUnlockTimestamps[sponsor][qCount] == 0) {
+                        levelUnlockTimestamps[sponsor][qCount] = block.timestamp;
+                    }
+                    emit QualifiedDirectAdded(sponsor, _user);
+                    _settleBdi(sponsor); // Re-check BDI for sponsor
+                }
+            }
+            
+            // 2. Time-Limited Booster Qualification
+            if (!u.isQualifiedBooster && sponsor != address(0)) {
+                if (block.timestamp <= users[sponsor].joinTimestamp + BOOST_WINDOW) {
+                    u.isQualifiedBooster = true;
+                    users[sponsor].boosterQualifiedDirects++;
+                    checkBoostStatus(sponsor); // Re-check booster for sponsor
+                }
             }
         }
     }
@@ -179,11 +240,10 @@ contract NeoX {
 
     function checkBdiTier(address _user) public view returns (uint256) {
         User storage u = users[_user];
-        if (u.directReferrals < 10 && !specialUsers[_user]) return 0;
+        if (u.totalQualifiedDirects < 10 && !specialUsers[_user]) return 0;
         
         for (uint i = 4; i >= 1; i--) {
             if (u.businessValue >= bdiThresholds[i]) {
-                if(specialUsers[_user] && i < 1) return 1; // Special users get at least tier 1? No, rules say 10 directs.
                 return i;
             }
         }
@@ -215,10 +275,18 @@ contract NeoX {
         uint256 rate = getRoiRate(_user);
         uint256 roiAmount = (u.idValue * rate * periodsSpent) / 100;
         
+        // 1. Personal ROI Cap (2x)
         uint256 maxRoi = u.idValue * 2;
         if (u.totalRoiEarned + roiAmount > maxRoi) {
             roiAmount = maxRoi > u.totalRoiEarned ? maxRoi - u.totalRoiEarned : 0;
         }
+
+        // 2. Global Income Cap (4x)
+        uint256 maxGlobal = u.idValue * 4;
+        if (u.totalCappedIncome + roiAmount > maxGlobal) {
+            roiAmount = maxGlobal > u.totalCappedIncome ? maxGlobal - u.totalCappedIncome : 0;
+        }
+
         return (roiAmount, periodsSpent);
     }
 
@@ -281,16 +349,17 @@ contract NeoX {
         (uint256 pending, uint256 periods) = pendingRoiIncome(_user);
         if (periods > 0) {
             User storage u = users[_user];
+            uint256 _startTime = u.lastRoiTimestamp;
             // Update timestamp regardless of whether income was earned (to prevent backlog)
-            u.lastRoiTimestamp += (periods * DAY_PERIOD);
-            
             if (pending > 0) {
                 u.totalRoiEarned += pending;
+                u.totalCappedIncome += pending;
                 u.pendingIncome += pending;
-                _distributeUplineBonus(_user, pending);
-                _distributeDownlineBonus(_user, pending);
+                _distributeUplineBonus(_user, pending, periods, _startTime);
+                _distributeDownlineBonus(_user, pending, periods);
                 emit IncomeReceived(_user, address(0), pending, "ROI Accumulation");
             }
+            u.lastRoiTimestamp += (periods * DAY_PERIOD);
         }
     }
 
@@ -330,26 +399,59 @@ contract NeoX {
         }
     }
 
-    function _distributeUplineBonus(address _user, uint256 _roiAmount) internal {
+    function _distributeUplineBonus(address _user, uint256 _roiAmount, uint256 _periods, uint256 _startTime) internal {
+        if (_periods == 0) return;
         address current = users[_user].sponsor;
-        uint256 bonus = (_roiAmount * UPLINE_BONUS_PCT) / 100;
-        
-        for (uint i = 0; i < 10; i++) {
+        uint256 perPeriodBonus = (_roiAmount * UPLINE_BONUS_PCT) / (100 * _periods);
+        uint256 endTime = _startTime + (_periods * DAY_PERIOD);
+
+        for (uint256 i = 1; i <= 10; i++) {
             if (current == address(0)) break;
-            if (specialUsers[current] || users[current].directReferrals >= 10) {
-                users[current].pendingIncome += bonus;
-                emit IncomeReceived(current, _user, bonus, "Upline Bonus");
+            
+            uint256 unlockTime = levelUnlockTimestamps[current][i];
+            if (specialUsers[current]) unlockTime = users[current].joinTimestamp;
+
+            if (unlockTime != 0 && unlockTime < endTime) {
+                uint256 effectiveStart = unlockTime > _startTime ? unlockTime : _startTime;
+                uint256 overlapTime = endTime - effectiveStart;
+                uint256 overlapPeriods = overlapTime / DAY_PERIOD;
+                
+                if (overlapPeriods > _periods) overlapPeriods = _periods;
+
+                if (overlapPeriods > 0) {
+                    uint256 bonus = perPeriodBonus * overlapPeriods;
+                    uint256 cappedBonus = _applyGlobalCap(current, bonus);
+                    if (cappedBonus > 0) {
+                        users[current].pendingIncome += cappedBonus;
+                        users[current].totalCappedIncome += cappedBonus;
+                        emit IncomeReceived(current, _user, cappedBonus, _getUplineLevelLabel(i));
+                    }
+                }
             }
             current = users[current].sponsor;
         }
     }
 
-    function _distributeDownlineBonus(address _user, uint256 _roiAmount) internal {
+    function _getUplineLevelLabel(uint256 _level) internal pure returns (string memory) {
+        if (_level == 1) return "Upline Bonus (L1)";
+        if (_level == 2) return "Upline Bonus (L2)";
+        if (_level == 3) return "Upline Bonus (L3)";
+        if (_level == 4) return "Upline Bonus (L4)";
+        if (_level == 5) return "Upline Bonus (L5)";
+        if (_level == 6) return "Upline Bonus (L6)";
+        if (_level == 7) return "Upline Bonus (L7)";
+        if (_level == 8) return "Upline Bonus (L8)";
+        if (_level == 9) return "Upline Bonus (L9)";
+        if (_level == 10) return "Upline Bonus (L10)";
+        return "Upline Bonus";
+    }
+
+    function _distributeDownlineBonus(address _user, uint256 _roiAmount, uint256 _periods) internal {
         uint256 levelPoolBonus = (_roiAmount * DOWNLINE_BONUS_PCT) / 100;
         
         // Level n+1
         address[] memory nPlus1 = users[_user].referrals;
-        _distributeToLevel(nPlus1, levelPoolBonus, _user);
+        _distributeToLevel(nPlus1, levelPoolBonus, _user, _periods);
         
         // Level n+2 (collect all referrals of n+1)
         uint256 totalN2Count = 0;
@@ -366,11 +468,13 @@ contract NeoX {
                     nPlus2[k++] = refs[j];
                 }
             }
-            _distributeToLevel(nPlus2, levelPoolBonus, _user);
+            _distributeToLevel(nPlus2, levelPoolBonus, _user, _periods);
         }
     }
 
-    function _distributeToLevel(address[] memory _levelMembers, uint256 _amount, address _from) internal {
+    function _distributeToLevel(address[] memory _levelMembers, uint256 _amount, address _from, uint256 _periods) internal {
+        if (_periods == 0) return;
+        
         uint256 eligibleCount = 0;
         for(uint i=0; i<_levelMembers.length; i++) {
             if (specialUsers[_levelMembers[i]] || users[_levelMembers[i]].idValue >= 250 * 1e18) {
@@ -379,14 +483,42 @@ contract NeoX {
         }
         
         if (eligibleCount > 0) {
-            uint256 share = _amount / eligibleCount;
+            uint256 perReferralTotalShare = _amount / eligibleCount;
+            uint256 startTime = users[_from].lastRoiTimestamp;
+            uint256 endTime = block.timestamp;
+
             for(uint i=0; i<_levelMembers.length; i++) {
-                if (specialUsers[_levelMembers[i]] || users[_levelMembers[i]].idValue >= 250 * 1e18) {
-                    users[_levelMembers[i]].pendingIncome += share;
-                    emit IncomeReceived(_levelMembers[i], _from, share, "Downline Bonus");
+                address member = _levelMembers[i];
+                if (specialUsers[member] || users[member].idValue >= 250 * 1e18) {
+                    uint256 memberJoin = users[member].joinTimestamp;
+                    uint256 effectiveStart = memberJoin > startTime ? memberJoin : startTime;
+                    
+                    if (endTime > effectiveStart) {
+                        uint256 overlapTime = endTime - effectiveStart;
+                        uint256 overlapPeriods = overlapTime / DAY_PERIOD;
+                        if (overlapPeriods > _periods) overlapPeriods = _periods;
+
+                        if (overlapPeriods > 0) {
+                            uint256 share = (perReferralTotalShare * overlapPeriods) / _periods;
+                            uint256 cappedShare = _applyGlobalCap(member, share);
+                            if (cappedShare > 0) {
+                                users[member].pendingIncome += cappedShare;
+                                users[member].totalCappedIncome += cappedShare;
+                                emit IncomeReceived(member, _from, cappedShare, "Downline Bonus");
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    function _applyGlobalCap(address _user, uint256 _amount) internal view returns (uint256) {
+        User storage u = users[_user];
+        uint256 maxGlobal = u.idValue * 4;
+        if (u.totalCappedIncome >= maxGlobal) return 0;
+        uint256 remaining = maxGlobal - u.totalCappedIncome;
+        return _amount > remaining ? remaining : _amount;
     }
 
     function emergencyWithdraw() external onlyOwner {

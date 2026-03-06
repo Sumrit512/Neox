@@ -256,6 +256,30 @@ export default function DashboardPage() {
     query: { enabled: !!address }
   })
 
+  const liveRoi = useMemo(() => {
+    if (!userData || !mounted) return 0n
+    const last = userData[5]
+    const idVal = userData[2]
+    const earned = userData[6]
+    const now = BigInt(Math.floor(Date.now() / 1000))
+    const period = 300n // 5 minutes
+
+    if (!last || last === 0n || last >= now || idVal === 0n) return 0n
+
+    const timePassed = now - last
+    const periods = timePassed / period
+    if (periods <= 0n) return 0n
+
+    const rate = userData[11] ? 4n : (userData[10] ? 3n : 2n)
+    let roi = (idVal * rate * periods) / 100n
+
+    const maxRoi = idVal * 2n
+    if (earned + roi > maxRoi) {
+      roi = maxRoi > earned ? maxRoi - earned : 0n
+    }
+    return roi
+  }, [userData, mounted])
+
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: USDT_ADDRESS_TESTNET,
     abi: USDT_ABI,
@@ -269,6 +293,14 @@ export default function DashboardPage() {
     abi: NEOX_ABI,
     functionName: 'getReferrals',
     args: [address],
+    query: { enabled: !!address }
+  })
+
+  const { data: level1UnlockTimestamp } = useReadContract({
+    address: NEOX_ADDRESS,
+    abi: NEOX_ABI,
+    functionName: 'levelUnlockTimestamps',
+    args: [address, 1n],
     query: { enabled: !!address }
   })
 
@@ -288,10 +320,11 @@ export default function DashboardPage() {
   })
 
   const liveDirectRoi = useMemo(() => {
-    if (!referralDataResults || !Array.isArray(referralDataResults)) return 0n
+    if (!referralDataResults || !Array.isArray(referralDataResults) || !level1UnlockTimestamp || level1UnlockTimestamp === 0n) return 0n
     let totalLiveDirectRoi = 0n
     const now = BigInt(Math.floor(Date.now() / 1000))
     const period = 300n // DAY_PERIOD
+    const myUnlock = BigInt(level1UnlockTimestamp)
 
     referralDataResults.forEach(res => {
       if (!res.result) return
@@ -303,28 +336,56 @@ export default function DashboardPage() {
       const earned = r[6]
 
       if (!last || last === 0n || last >= now) return
-      const timePassed = now - last
+
+      const startTime = last
+      const endTime = now
+
+      // Proportional math: Only cycles where I was already qualified
+      const effectiveStart = myUnlock > startTime ? myUnlock : startTime
+      if (endTime <= effectiveStart) return
+
+      const timePassed = endTime - effectiveStart
       const periods = timePassed / period
       if (periods <= 0n) return
 
-      const rate = b4 ? 4n : b2 ? 3n : 2n
-      let roi = (idVal * rate * periods) / 100n
+      // We also need the total periods for the referral to calculate the base ROI correctly
+      const totalElapsed = endTime - startTime
+      const totalPeriods = totalElapsed / period
+      if (totalPeriods <= 0n) return
 
+      const rate = b4 ? 4n : b2 ? 3n : 2n
+      const perPeriodRoi = (idVal * rate) / 100n
+      let roi = perPeriodRoi * periods
+
+      // 1. Referral's Personal ROI Cap (2x)
       const maxRoi = idVal * 2n
-      if (earned + roi > maxRoi) {
-        roi = maxRoi > earned ? maxRoi - earned : 0n
+      const totalAccruingRoi = perPeriodRoi * totalPeriods
+      if (earned + totalAccruingRoi > maxRoi) {
+        const remainingSpace = maxRoi > earned ? maxRoi - earned : 0n
+        roi = (remainingSpace * periods) / totalPeriods
       }
 
-      totalLiveDirectRoi += (roi * 5n) / 100n
+      // 2. MY Global Cap (4x)
+      const myMaxGlobal = userData[2] * 4n
+      const myTotalCapped = userData[27] // totalCappedIncome
+      const myRemainingGlobal = myMaxGlobal > myTotalCapped ? myMaxGlobal - myTotalCapped : 0n
+
+      const myBonus = (roi * 5n) / 100n
+      if (totalLiveDirectRoi + myBonus > myRemainingGlobal) {
+        const finalBonus = myRemainingGlobal > totalLiveDirectRoi ? myRemainingGlobal - totalLiveDirectRoi : 0n
+        totalLiveDirectRoi += finalBonus
+      } else {
+        totalLiveDirectRoi += myBonus
+      }
     })
     return totalLiveDirectRoi
-  }, [referralDataResults])
+  }, [referralDataResults, level1UnlockTimestamp, userData])
 
   const { writeContract, data: hash, isPending: isTxPending } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
 
   // Data Parsing Logic - MUST BE BEFORE EFFECTS AND MEMOS
-  const userDataArray = userData || [false, '0x...', 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, false, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false]
+  const userDataArray = userData || [false, '0x...', 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, false, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, 0n, 0n, 0n, false, false, 0n]
 
   const u = Array.isArray(userDataArray) ? {
     isRegistered: userDataArray[0],
@@ -348,7 +409,13 @@ export default function DashboardPage() {
     lastRewardTimestamp: userDataArray[18],
     rewardEndTimestamp: userDataArray[19],
     totalRewardEarned: userDataArray[20],
-    isRewardActive: userDataArray[21]
+    isRewardActive: userDataArray[21],
+    totalDirectEarned: userDataArray[22],
+    totalQualifiedDirects: userDataArray[23],
+    boosterQualifiedDirects: userDataArray[24],
+    isQualified100: userDataArray[25],
+    isQualifiedBooster: userDataArray[26],
+    totalCappedIncome: userDataArray[27]
   } : userDataArray
 
   const {
@@ -356,31 +423,128 @@ export default function DashboardPage() {
     lastRoiTimestamp, totalRoiEarned, pendingIncome, directReferrals,
     businessValue, isBoosted2, isBoosted4,
     bdiStartTime, lastBdiTimestamp, currentBdiTier, bdiEndTimestamp, totalBdiEarned,
-    maxLegBusiness, lastRewardTimestamp, rewardEndTimestamp, totalRewardEarned, isRewardActive
+    maxLegBusiness, lastRewardTimestamp, rewardEndTimestamp, totalRewardEarned, isRewardActive,
+    totalDirectEarned, totalQualifiedDirects, boosterQualifiedDirects, isQualified100, isQualifiedBooster,
+    totalCappedIncome
   } = u
+
+  const isMaxRoiReached = useMemo(() => {
+    if (!idValue || idValue === 0n) return false;
+    const maxRoi = idValue * 2n;
+    const earned = totalRoiEarned || 0n;
+    const currentAccruing = liveRoi || 0n;
+    return (earned + currentAccruing) >= maxRoi;
+  }, [idValue, totalRoiEarned, liveRoi]);
+
+  const isGlobalCapReached = useMemo(() => {
+    if (!idValue || idValue === 0n) return false;
+    const maxGlobal = idValue * 4n;
+    const current = totalCappedIncome || 0n;
+    return (current + (liveRoi || 0n) + (liveDirectRoi || 0n)) >= maxGlobal;
+  }, [idValue, totalCappedIncome, liveRoi, liveDirectRoi]);
 
   const totalAccumulated =
     BigInt(pendingIncome || 0n) +
     BigInt(pendingBdi || 0n) +
-    BigInt(pendingRoi?.[0] || 0n) +
-    BigInt(pendingReward || 0n)
+    BigInt(pendingReward || 0n) +
+    BigInt(liveDirectRoi || 0n) +
+    BigInt(liveRoi || 0n)
 
-  // FIX: Identify how much of 'pendingIncome' is actually settled ROI
-  const settledRoiInPending = useMemo(() => {
-    if (!transactions || transactions.length === 0) return 0n;
+  // GRANULAR BALANCE BREAKDOWN: Identify how much of 'pendingIncome' belongs to each category
+  const settledBreakdown = useMemo(() => {
+    const defaultRes = { roi: 0n, bdi: 0n, matching: 0n, direct: 0n, directRoi: 0n };
+    const breakdown = { ...defaultRes };
+    let identified = 0n;
 
-    // Find latest withdrawal time to calculate current balance breakdown
-    const lastWithdrawal = [...transactions]
-      .filter(tx => tx.type === 'Withdrawal' && tx.isReal)
-      .sort((a, b) => b.timestamp - a.timestamp)[0];
+    if (transactions && transactions.length > 0) {
+      // Find latest Withdrawal event to calculate current balance breakdown
+      const lastWithdrawal = [...transactions]
+        .filter(tx => tx.type === 'Withdrawal' && tx.isReal)
+        .sort((a, b) => {
+          if (b.blockNumber !== a.blockNumber) return b.blockNumber - a.blockNumber;
+          return (b.logIndex || 0) - (a.logIndex || 0);
+        })[0];
 
-    const cutoff = lastWithdrawal ? lastWithdrawal.timestamp : 0;
+      const currentLogs = transactions.filter(tx => {
+        if (!tx.isReal) return false;
+        if (!lastWithdrawal) return true;
 
-    // Sum ROI IncomeReceived logs after that cutoff
-    return transactions
-      .filter(tx => tx.isReal && tx.timestamp > cutoff && (tx.type === 'ROI' || tx.type.toLowerCase().includes('roi')))
-      .reduce((acc, tx) => acc + parseUnits(tx.amount || '0', 18), 0n);
-  }, [transactions]);
+        // Only include logs that occurred AFTER the last withdrawal
+        if (tx.blockNumber > lastWithdrawal.blockNumber) return true;
+        if (tx.blockNumber === lastWithdrawal.blockNumber && (tx.logIndex || 0) > (lastWithdrawal.logIndex || 0)) return true;
+        return false;
+      });
+
+      currentLogs.forEach(tx => {
+        const amt = parseUnits(tx.amount || '0', 18);
+        if (tx.type.includes('ROI')) {
+          breakdown.roi += amt;
+          identified += amt;
+        } else if (tx.type.includes('Business') || tx.type.includes('BDI')) {
+          breakdown.bdi += amt;
+          identified += amt;
+        } else if (tx.type.includes('Team') || tx.type.includes('Matching')) {
+          breakdown.matching += amt;
+          identified += amt;
+        } else if (tx.type.includes('Direct')) {
+          breakdown.direct += amt;
+          identified += amt;
+        } else if (tx.type.includes('Bonus')) {
+          breakdown.directRoi += amt;
+          identified += amt;
+        }
+      });
+    }
+
+    // REFINED FALLBACK LOGIC:
+    // Any unaccounted balance in pendingIncome is first attributed to ROI (up to the cap),
+    // then to Direct Income as a catch-all. 
+    // This ensures the dashboard reflects the user's likely earnings when logs are incomplete.
+    const pendingIncBI = BigInt(pendingIncome || 0n);
+    let unaccounted = pendingIncBI > identified ? (pendingIncBI - identified) : 0n;
+
+    if (unaccounted > 0n) {
+      const maxRoi = (idValue || 0n) * 2n;
+      // We want the ROI card to show: Pending accruing + any unaccounted logs that belong to ROI.
+      // But we shouldn't exceed the max ROI in total for the account.
+      // The total previously settled + withdrawn ROI is `totalRoiEarned`.
+      // The space left to assign unallocated balance to ROI is: maxRoi - (totalRoiEarned - pendingIncBI)
+      // wait, `totalRoiEarned` INCLUDES `pendingIncome` related to ROI.
+      // So if `totalRoiEarned` == `maxRoi` (40 USDT), then ALL of that ROI is either in `pendingIncome` or withdrawn.
+      // How much of the CURRENT pendingIncome belongs to ROI? 
+      // It should be whatever is needed to reach `totalRoiEarned` when combined with past withdrawals.
+      // Easiest approach: The "Accumulated ROI" card shows `breakdown.roi`.
+      // The absolute maximum the card should ever show is `maxRoi`.
+      // Currently the card displays `pendingRoi?.[0] + breakdown.roi`.
+
+      const accruing = pendingRoi?.[0] || 0n;
+      const currentDisplayedRoi = accruing + breakdown.roi;
+
+      // If we haven't displayed the full maxRoi on the card *and* it hasn't been withdrawn already..
+      // Actually, if they haven't withdrawn ANY ROI, the card should show 40 USDT exactly.
+      // The space left to show on the card *right now* is `totalRoiEarned` (which is the true total they have ever earned) 
+      // MINUS what we have already identified as ROI in the logs + what's accruing.
+      // IF totalRoiEarned is 40.0, and they haven't withdrawn, we want the card to show 40.0.
+
+      // The true amount of ROI resting in the pending balance *must* be:
+      // totalRoiEarned - (sum of all past ROI withdrawals)
+      // Since tracking past withdrawals perfectly might be tricky if logs are missing, 
+      // a safe proxy for "How much ROI is currently pending?" is to look at how much space 
+      // is left in the total pending balance that *could* be ROI.
+
+      // Let's assume as much of the unaccounted balance is ROI as possible, up to `totalRoiEarned`.
+      const roiInPendingSafe = totalRoiEarned > breakdown.roi ? totalRoiEarned - breakdown.roi : 0n;
+
+      const toAddRoi = unaccounted > roiInPendingSafe ? roiInPendingSafe : unaccounted;
+      breakdown.roi += toAddRoi;
+      unaccounted -= toAddRoi;
+
+      // Everything else goes to Direct
+      breakdown.direct += unaccounted;
+    }
+
+    return breakdown;
+  }, [transactions, pendingIncome, idValue, pendingRoi, totalRoiEarned]);
 
   const canHarvest = totalAccumulated >= parseUnits('1', 18)
 
@@ -451,7 +615,58 @@ export default function DashboardPage() {
         }
       }
 
-      // 4. Detailed "Held" Rewards Breakdown
+      // 4. Virtual Direct ROI Accumulation (Live)
+      if (referralDataResults && Array.isArray(referralDataResults) && level1UnlockTimestamp && level1UnlockTimestamp > 0n) {
+        const myUnlock = BigInt(level1UnlockTimestamp)
+
+        referralDataResults.forEach((res, refIdx) => {
+          if (!res.result) return
+          const r = res.result
+          const refAddr = referralAddrs[refIdx]
+          const refIdVal = r[2]
+          const refLast = r[5]
+          const refB2 = r[10]
+          const refB4 = r[11]
+          const refEarned = r[6]
+          const refMax = refIdVal * 2n
+
+          if (refLast && refLast > 0n && refIdVal > 0n && refEarned < refMax) {
+            const refRate = refB4 ? 4n : (refB2 ? 3n : 2n)
+            const refPerPeriod = (refIdVal * refRate) / 100n
+            const refElapsed = nowTs - refLast
+            const refPeriodsCount = refElapsed / period
+            let refCumulative = refEarned
+
+            for (let i = 1n; i <= refPeriodsCount; i++) {
+              let refAmt = refPerPeriod
+              if (refCumulative + refAmt > refMax) {
+                refAmt = refMax > refCumulative ? refMax - refCumulative : 0n
+              }
+
+              const cycleTs = Number(refLast) + Number(i * period)
+
+              // Only add virtual entry if I was qualified during this cycle
+              if (refAmt > 0n && BigInt(cycleTs) >= myUnlock) {
+                const myBonusAmt = (refAmt * 5n) / 100n
+                if (myBonusAmt > 0n) {
+                  virtual.push({
+                    id: `v-direct-roi-${refAddr}-${i}`,
+                    type: 'Direct ROI (Live)',
+                    amount: formatUnits(myBonusAmt, 18),
+                    isPositive: true,
+                    isVirtual: true,
+                    timestamp: cycleTs * 1000,
+                    subtext: `From: ${refAddr.slice(0, 6)}...${refAddr.slice(-4)}`
+                  })
+                }
+              }
+              refCumulative += refAmt
+            }
+          }
+        })
+      }
+
+      // 5. Detailed "Held" Rewards Breakdown
       // Instead of one big bar, we show individual pending rewards
       if (pendingRoi && pendingRoi[0] > 0n) {
         virtual.push({
@@ -537,7 +752,10 @@ export default function DashboardPage() {
   const [nextYieldTimer, setNextYieldTimer] = useState(0)
 
   useEffect(() => {
-    if (!lastRoiTimestamp || !mounted) return
+    if (!lastRoiTimestamp || !mounted || isMaxRoiReached) {
+      setNextYieldTimer(0);
+      return;
+    }
     const interval = setInterval(() => {
       const now = Math.floor(Date.now() / 1000)
       const last = Number(lastRoiTimestamp)
@@ -857,12 +1075,41 @@ export default function DashboardPage() {
         ) : (
           <>
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-              <StatCard title="Accumulated ROI" value={`${parseFloat(formatUnits(BigInt(pendingRoi?.[0] || 0n) + settledRoiInPending, 18)).toFixed(4)} USDT`} icon={TrendingUp} color="var(--primary)" delay={0.1} />
-              {/* <StatCard title="Life-to-Date ROI" value={`${parseFloat(formatUnits(totalRoiEarned || 0n, 18)).toFixed(4)} USDT`} icon={History} color="var(--text-dim)" delay={0.15} /> */}
-              <StatCard title="Direct Income" value={`${parseFloat(formatUnits((pendingIncome || 0n) - settledRoiInPending, 18)).toFixed(4)} USDT`} icon={UserPlus} color="#FF8C00" delay={0.2} />
-              <StatCard title="Direct ROI (Live)" value={`${parseFloat(formatUnits(liveDirectRoi || 0n, 18)).toFixed(4)} USDT`} icon={Activity} color="#00E5FF" delay={0.25} />
-              <StatCard title="Network BDI" value={`${parseFloat(formatUnits((totalBdiEarned || 0n) + (pendingBdi || 0n), 18)).toFixed(4)} USDT`} icon={Zap} color="var(--accent)" delay={0.3} />
-              <StatCard title="Team Reward" value={`${parseFloat(formatUnits(pendingReward || 0n, 18)).toFixed(4)} USDT`} icon={Users} color="#00FF7F" delay={0.4} />
+              <StatCard
+                title="Accumulated ROI"
+                value={`${parseFloat(formatUnits((totalRoiEarned || 0n) + (liveRoi || 0n), 18)).toFixed(4)} USDT`}
+                icon={TrendingUp}
+                color="var(--primary)"
+                delay={0.1}
+              />
+              <StatCard
+                title="Direct Income"
+                value={`${parseFloat(formatUnits(totalDirectEarned || 0n, 18)).toFixed(4)} USDT`}
+                icon={UserPlus}
+                color="#FF8C00"
+                delay={0.2}
+              />
+              <StatCard
+                title="Direct ROI Bonuses"
+                value={`${parseFloat(formatUnits((totalCappedIncome || 0n) - (totalRoiEarned || 0n) - (totalDirectEarned || 0n) + (liveDirectRoi || 0n), 18)).toFixed(4)} USDT`}
+                icon={Activity}
+                color="#00E5FF"
+                delay={0.25}
+              />
+              <StatCard
+                title="Network BDI"
+                value={`${parseFloat(formatUnits((totalBdiEarned || 0n) + BigInt(pendingBdi || 0n), 18)).toFixed(4)} USDT`}
+                icon={Zap}
+                color="var(--accent)"
+                delay={0.3}
+              />
+              <StatCard
+                title="Team Rewards"
+                value={`${parseFloat(formatUnits((totalRewardEarned || 0n) + BigInt(pendingReward || 0n), 18)).toFixed(4)} USDT`}
+                icon={Users}
+                color="#00FF7F"
+                delay={0.4}
+              />
             </div>
 
             <div className={activeTab === 'network' ? "network-view-container" : "main-dashboard-grid"}>
@@ -888,12 +1135,12 @@ export default function DashboardPage() {
                         <div className="rate-value">{roiRate?.toString() || '2'}% Every 5 Mins</div>
                       </div>
                       <div className="rate-badge" style={{
-                        background: (totalRoiEarned >= idValue * 2n && idValue > 0n) ? 'rgba(255, 68, 68, 0.1)' : 'rgba(138, 43, 226, 0.1)',
-                        color: (totalRoiEarned >= idValue * 2n && idValue > 0n) ? '#ff4444' : 'var(--primary)',
-                        borderColor: (totalRoiEarned >= idValue * 2n && idValue > 0n) ? 'rgba(255, 68, 68, 0.2)' : 'rgba(138, 43, 226, 0.2)'
+                        background: isMaxRoiReached ? 'rgba(255, 68, 68, 0.1)' : 'rgba(138, 43, 226, 0.1)',
+                        color: isMaxRoiReached ? '#ff4444' : 'var(--primary)',
+                        borderColor: isMaxRoiReached ? 'rgba(255, 68, 68, 0.2)' : 'rgba(138, 43, 226, 0.2)'
                       }}>
                         <div className="rate-value">
-                          <Clock size={12} /> {(totalRoiEarned >= idValue * 2n && idValue > 0n) ? 'MAX CAP REACHED' : `Next: ${formatTime(nextYieldTimer)}`}
+                          <Clock size={12} /> {isMaxRoiReached ? 'MAX CAP REACHED' : `Next: ${formatTime(nextYieldTimer)}`}
                         </div>
                       </div>
                       {currentBdiTier > 0 && (
@@ -904,6 +1151,78 @@ export default function DashboardPage() {
                       {isRewardActive && (
                         <div className="rate-badge" style={{ background: 'rgba(0, 255, 127, 0.1)', color: '#00FF7F', borderColor: 'rgba(0, 255, 127, 0.2)' }}>
                           <div className="rate-value">MATCHING REW. ACTIVE</div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="cap-progress-group">
+                      {/* ROI Cap Progress */}
+                      <div className="cap-card">
+                        <div className="cap-label-row">
+                          <span className="cap-label">ROI Yield Cap (2x)</span>
+                          <span className="cap-value" style={{
+                            color: Number(idValue) > 0 && (Number(totalRoiEarned + (liveRoi || 0n)) / Number(idValue * 2n)) >= 0.9 ? '#ff4d4d' : 'var(--primary)'
+                          }}>
+                            {Number(idValue) > 0 ? ((Number(totalRoiEarned + (liveRoi || 0n)) / Number(idValue * 2n)) * 100).toFixed(1) : '0'}%
+                          </span>
+                        </div>
+                        <div className="cap-bar-bg">
+                          <div
+                            className="cap-bar-fill"
+                            style={{
+                              width: `${Math.min(100, Number(idValue) > 0 ? (Number(totalRoiEarned + (liveRoi || 0n)) / Number(idValue * 2n)) * 100 : 0)}%`,
+                              background: 'linear-gradient(90deg, #FFD700, #B8860B)',
+                              boxShadow: '0 0 10px rgba(255, 215, 0, 0.4)'
+                            }}
+                          />
+                        </div>
+                        <div className="cap-info-row">
+                          <span>Earned: {parseFloat(formatUnits(totalRoiEarned + (liveRoi || 0n), 18)).toFixed(2)}</span>
+                          <span>Max: {parseFloat(formatUnits(idValue * 2n, 18)).toFixed(2)}</span>
+                        </div>
+                      </div>
+
+                      {/* Global Cap Progress */}
+                      <div className="cap-card">
+                        <div className="cap-label-row">
+                          <span className="cap-label">Global Income Cap (4x)</span>
+                          <span className="cap-value" style={{
+                            color: Number(idValue) > 0 && (Number(totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) / Number(idValue * 4n)) >= 0.9 ? '#ff4d4d' : 'var(--accent)'
+                          }}>
+                            {Number(idValue) > 0 ? ((Number(totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) / Number(idValue * 4n)) * 100).toFixed(1) : '0'}%
+                          </span>
+                        </div>
+                        <div className="cap-bar-bg">
+                          <div
+                            className="cap-bar-fill"
+                            style={{
+                              width: `${Math.min(100, Number(idValue) > 0 ? (Number(totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) / Number(idValue * 4n)) * 100 : 0)}%`,
+                              background: 'linear-gradient(90deg, #8A2BE2, #4B0082)',
+                              boxShadow: '0 0 10px rgba(138, 43, 226, 0.4)'
+                            }}
+                          />
+                        </div>
+                        <div className="cap-info-row">
+                          <span>Income: {parseFloat(formatUnits(totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n), 18)).toFixed(2)}</span>
+                          <span>Global Max: {parseFloat(formatUnits(idValue * 4n, 18)).toFixed(2)}</span>
+                        </div>
+                        <span className="cap-footer-note">*Excludes BDI and Team Rewards</span>
+                      </div>
+
+                      {/* Status Badges */}
+                      {isMaxRoiReached ? (
+                        <div className="status-badge" style={{ background: 'rgba(255, 68, 68, 0.1)', color: '#ff4444', border: '1px solid rgba(255, 68, 68, 0.2)' }}>
+                          <div className="status-pulse" style={{ background: '#ff4444' }} />
+                          PERSONAL YIELD MAX CAP REACHED
+                        </div>
+                      ) : isGlobalCapReached ? (
+                        <div className="status-badge" style={{ background: 'rgba(255, 68, 68, 0.1)', color: '#ff4444', border: '1px solid rgba(255, 68, 68, 0.2)' }}>
+                          <div className="status-pulse" style={{ background: '#ff4444' }} />
+                          GLOBAL INCOME MAX CAP REACHED
+                        </div>
+                      ) : (
+                        <div className="status-badge" style={{ background: 'rgba(0, 255, 127, 0.1)', color: '#00FF7F', border: '1px solid rgba(0, 255, 127, 0.2)' }}>
+                          <div className="status-pulse" style={{ background: '#00FF7F' }} />
+                          SYSTEM OPERATING AT MAXIMUM EFFICIENCY
                         </div>
                       )}
                     </div>
@@ -956,9 +1275,13 @@ export default function DashboardPage() {
                       <span className="input-unit">USDT</span>
                     </div>
                     {needsApproval && upgradeAmountBI >= parseUnits('1', 18) ? (
-                      <button className="btn-primary full-width" onClick={() => writeContract({ address: USDT_ADDRESS_TESTNET, abi: USDT_ABI, functionName: 'approve', args: [NEOX_ADDRESS, upgradeAmountBI * 100n] })} disabled={isConfirming || isTxPending}>Authorize Transaction</button>
+                      <button className="btn-primary full-width" onClick={() => writeContract({ address: USDT_ADDRESS_TESTNET, abi: USDT_ABI, functionName: 'approve', args: [NEOX_ADDRESS, upgradeAmountBI * 100n] })} disabled={isConfirming || isTxPending}>
+                        {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> : "Authorize Transaction"}
+                      </button>
                     ) : (
-                      <button className="btn-primary full-width" onClick={handleUpgrade} disabled={isConfirming || isTxPending || !upgradeAmount || upgradeAmountBI < parseUnits('1', 18)}>Process injection</button>
+                      <button className="btn-primary full-width" onClick={handleUpgrade} disabled={isConfirming || isTxPending || !upgradeAmount || upgradeAmountBI < parseUnits('1', 18)}>
+                        {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> : "Process injection"}
+                      </button>
                     )}
                   </>
                 )}
@@ -1011,10 +1334,42 @@ export default function DashboardPage() {
         .harvest-control { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
         .min-harvest-hint { font-size: 10px; color: var(--text-dim); background: rgba(255,255,255,0.05); padding: 4px 10px; border-radius: 6px; border: 1px solid var(--glass-border); letter-spacing: 0.5px; }
 
-        .search-group { position: relative; width: 100%; max-width: 240px; }
-        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); }
-        .search-input { padding-left: 40px !important; font-size: 13px !important; border-radius: 14px !important; height: 44px; background: rgba(255,255,255,0.03) !important; border-color: var(--glass-border) !important; }
-        .search-input:focus { border-color: var(--primary) !important; box-shadow: 0 0 15px rgba(255, 215, 0, 0.05) !important; }
+        .search-group { 
+          position: relative; 
+          width: 100%; 
+          display: flex;
+          align-items: center;
+          background: rgba(255,255,255,0.03); 
+          border: 1px solid var(--glass-border); 
+          border-radius: 14px;
+          height: 44px;
+          padding: 0 12px;
+          transition: all 0.3s;
+        }
+        .search-group:focus-within {
+          border-color: var(--primary);
+          background: rgba(255,255,255,0.05);
+          box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
+        }
+        .search-icon { 
+          color: var(--text-dim); 
+          flex-shrink: 0;
+          margin-right: 12px;
+          transition: color 0.3s;
+        }
+        .search-group:focus-within .search-icon {
+          color: var(--primary);
+        }
+        .search-input { 
+          width: 100%;
+          background: transparent !important;
+          border: none !important;
+          outline: none !important;
+          color: white !important;
+          font-size: 14px !important;
+          padding: 0 !important;
+          height: 100%;
+        }
 
         .modal-overlay { position: fixed; inset: 0; background: rgba(5, 10, 24, 0.8); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 20px; overflow-y: auto; }
         .modal-card { width: 100%; max-width: 440px; border: 1px solid var(--glass-border); padding: clamp(24px, 5vw, 40px); background: var(--surface) !important; box-shadow: 0 30px 60px rgba(0,0,0,0.5); }
@@ -1104,12 +1459,61 @@ export default function DashboardPage() {
         .m-log-amount { font-weight: 900; font-size: 18px; font-family: 'JetBrains Mono', monospace; }
         .m-log-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--glass-border); padding-top: 12px; }
 
-        .pagination-controls { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 35px; flex-wrap: wrap; }
-        .pg-btn { min-width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); color: var(--text); cursor: pointer; transition: all 0.2s; font-weight: 700; font-size: 13px; padding: 0 10px; }
-        .pg-btn:hover:not(:disabled) { background: var(--primary); color: #000; border-color: var(--primary); box-shadow: 0 0 20px var(--primary-glow); }
-        .pg-btn.active { background: var(--primary); color: #000; border-color: var(--primary); box-shadow: 0 0 20px var(--primary-glow); }
-        .pg-btn:disabled { opacity: 0.2; cursor: not-allowed; }
-        .pg-arrow { padding: 0 18px; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+        .pagination-controls { 
+          display: flex; 
+          justify-content: center; 
+          align-items: center; 
+          gap: 8px; 
+          margin: 40px auto 20px; 
+          width: 100%;
+          flex-wrap: wrap; 
+        }
+        .pg-btn { 
+          min-width: 36px; 
+          height: 36px; 
+          display: flex; 
+          align-items: center; 
+          justify-content: center; 
+          border-radius: 10px; 
+          background: rgba(255,255,255,0.03); 
+          border: 1px solid var(--glass-border); 
+          color: var(--text-dim); 
+          cursor: pointer; 
+          transition: all 0.2s; 
+          font-weight: 700; 
+          font-size: 13px; 
+          padding: 0 10px; 
+        }
+        .pg-btn:hover:not(:disabled) { 
+          background: var(--glass-hover); 
+          color: white; 
+          border-color: var(--primary); 
+          box-shadow: 0 0 15px rgba(255, 215, 0, 0.1); 
+        }
+        .pg-btn.active { 
+          background: var(--primary); 
+          color: #000; 
+          border-color: var(--primary); 
+          box-shadow: 0 0 20px var(--primary-glow); 
+        }
+        .pg-btn:disabled { 
+          opacity: 0.3; 
+          cursor: not-allowed; 
+          filter: grayscale(1);
+        }
+        .pg-arrow { 
+          padding: 0 14px; 
+          text-transform: uppercase; 
+          font-size: 11px; 
+          letter-spacing: 0.5px; 
+          min-width: auto;
+        }
+
+        @media (max-width: 480px) {
+          .pagination-controls { gap: 6px; }
+          .pg-btn { min-width: 32px; height: 32px; font-size: 12px; border-radius: 8px; }
+          .pg-arrow { padding: 0 10px; }
+        }
 
         @media (max-width: 900px) {
           .transactions-table th:nth-child(4), .transactions-table td:nth-child(4) { display: none; }

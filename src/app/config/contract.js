@@ -1,4 +1,4 @@
-export const NEOX_ADDRESS = '0x5ddc227f8c2ed3e12e389c6b077324ba0263f37c'
+export const NEOX_ADDRESS = '0xedc2138d8a691e85da0e321d437a5858ac42041b'
 
 export const NEOX_ABI = [
     {
@@ -37,6 +37,24 @@ export const NEOX_ABI = [
             { "indexed": false, "internalType": "string", "name": "typeOfIncome", "type": "string" }
         ],
         "name": "IncomeReceived",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            { "indexed": true, "internalType": "address", "name": "sponsor", "type": "address" },
+            { "indexed": true, "internalType": "address", "name": "referral", "type": "address" }
+        ],
+        "name": "QualifiedDirectAdded",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            { "indexed": true, "internalType": "address", "name": "user", "type": "address" },
+            { "indexed": false, "internalType": "uint256", "name": "level", "type": "uint256" }
+        ],
+        "name": "BoosterActivated",
         "type": "event"
     },
     {
@@ -162,6 +180,16 @@ export const NEOX_ABI = [
     },
     {
         "inputs": [
+            { "internalType": "address", "name": "", "type": "address" },
+            { "internalType": "uint256", "name": "", "type": "uint256" }
+        ],
+        "name": "levelUnlockTimestamps",
+        "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
             { "internalType": "uint256", "name": "_amount", "type": "uint256" }
         ],
         "name": "upgrade",
@@ -201,7 +229,13 @@ export const NEOX_ABI = [
             { "internalType": "uint256", "name": "lastRewardTimestamp", "type": "uint256" },
             { "internalType": "uint256", "name": "rewardEndTimestamp", "type": "uint256" },
             { "internalType": "uint256", "name": "totalRewardEarned", "type": "uint256" },
-            { "internalType": "bool", "name": "isRewardActive", "type": "bool" }
+            { "internalType": "bool", "name": "isRewardActive", "type": "bool" },
+            { "internalType": "uint256", "name": "totalDirectEarned", "type": "uint256" },
+            { "internalType": "uint256", "name": "totalQualifiedDirects", "type": "uint256" },
+            { "internalType": "uint256", "name": "boosterQualifiedDirects", "type": "uint256" },
+            { "internalType": "bool", "name": "isQualified100", "type": "bool" },
+            { "internalType": "bool", "name": "isQualifiedBooster", "type": "bool" },
+            { "internalType": "uint256", "name": "totalCappedIncome", "type": "uint256" }
         ],
         "stateMutability": "view",
         "type": "function"

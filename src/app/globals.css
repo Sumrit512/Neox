@@ -15,6 +15,117 @@
   --glass-hover: rgba(255, 255, 255, 0.06);
 }
 
+/* Dashboard Custom Components */
+.cap-progress-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  margin-top: 24px;
+  margin-bottom: 30px;
+}
+
+.cap-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 16px;
+  transition: all 0.3s ease;
+}
+
+.cap-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.cap-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.cap-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: #94A3B8;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+.cap-value {
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.cap-bar-bg {
+  width: 100%;
+  height: 14px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 100px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cap-bar-fill {
+  height: 100%;
+  border-radius: 100px;
+  transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cap-info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #94A3B8;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.cap-footer-note {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.4);
+  margin-top: 14px;
+  font-style: italic;
+  display: block;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 10px;
+}
+
+.status-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse-simple 2s infinite;
+}
+
+@keyframes pulse-simple {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+}
+
 * {
   box-sizing: border-box;
   padding: 0;
