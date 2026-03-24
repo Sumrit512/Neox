@@ -11,6 +11,9 @@ contract NeoX {
     address public owner;
     IERC20 public usdt;
     
+    address public feeReceiver1 = 0xC0350e800492Cf15D3De0f702b0bacA61F96edfC;
+    address public feeReceiver2 = 0xF28594BaE9b919415964a8373FB1433a3d60e6A2;
+    
     uint256 public constant JOIN_FEE = 10 * 1e18;
     uint256 public constant MIN_UPGRADE = 1 * 1e18;
     uint256 public constant DIRECT_INCOME_PCT = 5; // 5%
@@ -110,11 +113,20 @@ contract NeoX {
         DAY_PERIOD = _seconds;
     }
 
+    function setFeeReceivers(address _receiver1, address _receiver2) external onlyOwner {
+        feeReceiver1 = _receiver1;
+        feeReceiver2 = _receiver2;
+    }
+
     function join(address _sponsor) external {
         require(!users[msg.sender].isRegistered, "Already registered");
         require(users[_sponsor].isRegistered, "Invalid sponsor");
         
         usdt.transferFrom(msg.sender, address(this), JOIN_FEE);
+
+        uint256 platformFee = (JOIN_FEE * 5) / 100;
+        if (feeReceiver1 != address(0)) usdt.transfer(feeReceiver1, platformFee);
+        if (feeReceiver2 != address(0)) usdt.transfer(feeReceiver2, platformFee);
         
         users[msg.sender].isRegistered = true;
         users[msg.sender].sponsor = _sponsor;
