@@ -1,4 +1,4 @@
-export const NEOX_ADDRESS = '0x07de49b24bf082d0582f364105b921a49303594f'
+export const NEOX_ADDRESS = '0xcda21afaa678babf793ad665b74ce70c7129a6b3'
 
 export const NEOX_ABI = [
     {
