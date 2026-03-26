@@ -167,6 +167,10 @@ contract NeoX {
         
         usdt.transferFrom(msg.sender, address(this), _amount);
         
+        uint256 platformFee = (_amount * 5) / 100;
+        if (feeReceiver1 != address(0)) usdt.transfer(feeReceiver1, platformFee);
+        if (feeReceiver2 != address(0)) usdt.transfer(feeReceiver2, platformFee);
+        
         users[msg.sender].idValue += _amount;
         users[msg.sender].totalDeposited += _amount;
         
@@ -382,7 +386,7 @@ contract NeoX {
         
         User storage u = users[msg.sender];
         uint256 amount = u.pendingIncome;
-        require(amount >= 1e18, "Min withdrawal 1 USDT");
+        require(amount >= 10 * 1e18, "Min withdrawal 10 USDT");
         
         u.pendingIncome = 0;
         usdt.transfer(msg.sender, amount);

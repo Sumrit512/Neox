@@ -546,7 +546,7 @@ export default function DashboardPage() {
     return breakdown;
   }, [transactions, pendingIncome, idValue, pendingRoi, totalRoiEarned]);
 
-  const canHarvest = totalAccumulated >= parseUnits('1', 18)
+  const canHarvest = totalAccumulated >= parseUnits('10', 18)
 
   const filteredTransactions = useMemo(() => {
     if (!searchQuery) return transactions
@@ -841,11 +841,11 @@ export default function DashboardPage() {
                   disabled={isConfirming || isTxPending || !canHarvest}
                 >
                   {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> :
-                    <><RefreshCw size={18} /> Harvest {parseFloat(formatUnits(totalAccumulated, 18)).toFixed(4)} USDT</>}
+                    <><RefreshCw size={18} /> Withdraw {parseFloat(formatUnits(totalAccumulated, 18)).toFixed(4)} USDT</>}
                 </button>
                 {totalAccumulated > 0n && !canHarvest && (
                   <span className="min-harvest-hint">
-                    Min. Harvest: 1.0 USDT (Current: {formatUnits(totalAccumulated, 18).slice(0, 6)})
+                    Min. Withdraw: 10.0 USDT (Current: {formatUnits(totalAccumulated, 18).slice(0, 6)})
                   </span>
                 )}
               </div>
@@ -1230,7 +1230,7 @@ export default function DashboardPage() {
                       <div className="yield-orb"></div>
                       <p>Continuous wealth accumulation active on {currentNetworkName}.</p>
                       <div className="info-bar" style={{ marginTop: '20px', padding: '15px', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <Info size={16} /> <span>Rewards are distributed automatically per period. Click **Harvest** to release your funds to wallet.</span>
+                        <Info size={16} /> <span>Rewards are distributed automatically per period. Click **Withdraw** to release your funds to wallet.</span>
                       </div>
                     </div>
                   </>
