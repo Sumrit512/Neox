@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config'
-import { WagmiProvider, http } from 'wagmi'
+import { WagmiProvider, http, cookieStorage, createStorage } from 'wagmi'
 import { bsc, bscTestnet } from 'wagmi/chains'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -23,6 +23,9 @@ const config = defaultWagmiConfig({
     projectId,
     metadata,
     ssr: true,
+    storage: createStorage({
+        storage: cookieStorage
+    }),
     transports: {
         [bsc.id]: http(),
         [bscTestnet.id]: http('https://bsc-testnet.publicnode.com') // Using a reliable public node
