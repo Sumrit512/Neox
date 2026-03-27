@@ -13,7 +13,7 @@ const projectId = '0e23b709952480f8d9a5b43aa0d57d95'
 const metadata = {
     name: 'NeoX',
     description: 'NeoX Web 3.0 Platform',
-    url: 'http://localhost:3000', // Matches dev environment origin
+    url: typeof window !== 'undefined' ? window.location.origin : 'https://neox-protocol.vercel.app', 
     icons: ['https://avatars.githubusercontent.com/u/37784886']
 }
 

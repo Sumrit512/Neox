@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface IERC20 {
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function transfer(address recipient, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract NeoX {
+    using SafeERC20 for IERC20;
+    
     address public owner;
     IERC20 public usdt;
     
@@ -131,11 +130,11 @@ contract NeoX {
         require(!users[msg.sender].isRegistered, "Already registered");
         require(users[_sponsor].isRegistered, "Invalid sponsor");
         
-        usdt.transferFrom(msg.sender, address(this), JOIN_FEE);
+        usdt.safeTransferFrom(msg.sender, address(this), JOIN_FEE);
 
         uint256 platformFee = (JOIN_FEE * 5) / 100;
-        if (feeReceiver1 != address(0)) usdt.transfer(feeReceiver1, platformFee);
-        if (feeReceiver2 != address(0)) usdt.transfer(feeReceiver2, platformFee);
+        if (feeReceiver1 != address(0)) usdt.safeTransfer(feeReceiver1, platformFee);
+        if (feeReceiver2 != address(0)) usdt.safeTransfer(feeReceiver2, platformFee);
         
         users[msg.sender].isRegistered = true;
         users[msg.sender].sponsor = _sponsor;
@@ -158,7 +157,7 @@ contract NeoX {
         uint256 directIncome = (JOIN_FEE * DIRECT_INCOME_PCT) / 100;
         uint256 cappedDirect = _applyGlobalCap(_sponsor, directIncome);
         if (cappedDirect > 0) {
-            usdt.transfer(_sponsor, cappedDirect);
+            usdt.safeTransfer(_sponsor, cappedDirect);
             users[_sponsor].totalDirectEarned += cappedDirect;
             users[_sponsor].totalCappedIncome += cappedDirect;
             emit IncomeReceived(_sponsor, msg.sender, cappedDirect, "Direct Income");
@@ -181,11 +180,11 @@ contract NeoX {
         _settleRoi(msg.sender);
         _settleBdi(msg.sender);
         
-        usdt.transferFrom(msg.sender, address(this), _amount);
+        usdt.safeTransferFrom(msg.sender, address(this), _amount);
         
         uint256 platformFee = (_amount * 5) / 100;
-        if (feeReceiver1 != address(0)) usdt.transfer(feeReceiver1, platformFee);
-        if (feeReceiver2 != address(0)) usdt.transfer(feeReceiver2, platformFee);
+        if (feeReceiver1 != address(0)) usdt.safeTransfer(feeReceiver1, platformFee);
+        if (feeReceiver2 != address(0)) usdt.safeTransfer(feeReceiver2, platformFee);
         
         users[msg.sender].idValue += _amount;
         users[msg.sender].totalDeposited += _amount;
@@ -210,7 +209,7 @@ contract NeoX {
             uint256 upgradeIncome = (_amount * DIRECT_INCOME_PCT) / 100;
             uint256 cappedUpgrade = _applyGlobalCap(sponsor, upgradeIncome);
             if (cappedUpgrade > 0) {
-                usdt.transfer(sponsor, cappedUpgrade);
+                usdt.safeTransfer(sponsor, cappedUpgrade);
                 users[sponsor].totalDirectEarned += cappedUpgrade;
                 users[sponsor].totalCappedIncome += cappedUpgrade;
                 emit IncomeReceived(sponsor, msg.sender, cappedUpgrade, "Direct Upgrade Income");
@@ -419,7 +418,7 @@ contract NeoX {
         require(amount >= 10 * 1e18, "Min withdrawal 10 USDT");
         
         u.pendingIncome = 0;
-        usdt.transfer(msg.sender, amount);
+        usdt.safeTransfer(msg.sender, amount);
         
         emit Withdrawn(msg.sender, amount);
     }
@@ -569,7 +568,7 @@ contract NeoX {
 
     function emergencyWithdraw() external onlyOwner {
         uint256 balance = usdt.balanceOf(address(this));
-        usdt.transfer(owner, balance);
+        usdt.safeTransfer(owner, balance);
     }
 
     function getReferrals(address _user) external view returns (address[] memory) {

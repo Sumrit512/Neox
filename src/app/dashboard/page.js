@@ -83,28 +83,18 @@ export default function DashboardPage() {
     try {
       const latestBlock = await getBlockNumber(publicClient);
 
-      // STABLE SCAN: 2,000,000 blocks back in chunks of 2,000
-      const SCAN_DEPTH = 2000000n;
-      const CHUNK = 2000n;
+      // STABLE SCAN: 1,000,000 blocks back in chunks of 5,000
+      const SCAN_DEPTH = 1000000n;
+      const CHUNK = 5000n;
 
-      // Use joinTimestamp as a more efficient stop-point if available
-      let joinBlock = 0n;
-      if (joinTimestamp && joinTimestamp > 0n) {
-          // Approximate block: (now - join) / 3s per block
-          const now = BigInt(Math.floor(Date.now() / 1000));
-          const diff = now - BigInt(joinTimestamp);
-          joinBlock = latestBlock - (diff / 3n) - 5000n; // 5k block buffer
-          if (joinBlock < 0n) joinBlock = 0n;
-      }
-
-      const targetBlock = joinBlock > 0n ? joinBlock : (latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n);
+      const targetBlock = latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n;
       let currentTo = latestBlock;
       let allRawLogs = [];
       let joinFound = false;
 
       const eventNames = ['Joined', 'Upgraded', 'Withdrawn', 'IncomeReceived'];
 
-      // RECURSIVE SCANNER: Smaller splits and higher resilience
+      // RECURSIVE SCANNER: Splits ranges automatically if the node complains
       const deepScan = async (name, from, to) => {
         try {
           const eventObj = NEOX_ABI.find(x => x.name === name);
@@ -118,35 +108,33 @@ export default function DashboardPage() {
           if (name === 'Joined' && logs.length > 0) joinFound = true;
           return logs;
         } catch (err) {
-          if ((to - from) > 20n) { // Smarter splitting
+          if ((to - from) > 50n) {
             const mid = from + (to - from) / 2n;
-            const h1 = await deepScan(name, from, mid);
-            await new Promise(r => setTimeout(r, 50)); // Breathe
-            const h2 = await deepScan(name, mid + 1n, to);
+            const [h1, h2] = await Promise.all([
+              deepScan(name, from, mid),
+              deepScan(name, mid + 1n, to)
+            ]);
             return [...h1, ...h2];
           }
           return [];
         }
       };
 
-      console.log(`[NeoX] Optimized Sync: ${latestBlock} down to ${targetBlock}`);
+      console.log(`[NeoX] Stable Sync Start: ${latestBlock} down to ${targetBlock}`);
 
-      // SEQUENTIAL CHUNK LOOP: Don't hammer the RPC in parallel
+      // SEQUENTIAL CHUNK LOOP
       while (currentTo > targetBlock && !joinFound) {
         let currentFrom = currentTo > CHUNK ? currentTo - CHUNK : 0n;
         if (currentFrom < targetBlock) currentFrom = targetBlock;
 
-        console.log(`[NeoX] Chunk: ${currentFrom} to ${currentTo}`);
-        
-        // Use sequential for events to prevent "Connection Closed"
-        for (const name of eventNames) {
-            const result = await deepScan(name, currentFrom, currentTo);
-            allRawLogs = [...allRawLogs, ...result];
-            if (joinFound) break;
-            await new Promise(r => setTimeout(r, 30)); // Small RPC gap
-        }
+        console.log(`[NeoX] Scanning Chunk: ${currentFrom} to ${currentTo}`);
+        const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
+        allRawLogs = [...allRawLogs, ...chunkResults.flat()];
 
         currentTo = currentFrom - 1n;
+
+        // Optional: Small delay to let RPC breathe if needed
+        // await new Promise(r => setTimeout(r, 100));
       }
 
       const allRaw = allRawLogs;
@@ -185,20 +173,16 @@ export default function DashboardPage() {
           type = 'Withdrawal'; isPositive = false;
         }
 
-        const txid = log.transactionHash || log.txHash || log.hash;
-        if (eventName === 'Joined') console.log("[NeoX] Found Joined Event with Hash:", txid);
-
         return {
-          id: `${txid || 'unknown'}-${log.logIndex}`,
+          id: `${log.transactionHash}-${log.logIndex}`,
           type,
           amount,
           isPositive,
-          txHash: txid,
+          txHash: log.transactionHash,
           blockNumber: Number(log.blockNumber),
           logIndex: log.logIndex,
           timestamp: blockTimestamps.get(log.blockNumber) || Date.now(),
-          isReal: true,
-          isVirtual: false // CRITICAL: Explicitly mark as NOT virtual
+          isReal: true
         };
       });
 
@@ -321,6 +305,13 @@ export default function DashboardPage() {
     const standardRoi = ((idVal - boostedStakeVar) * 2n * periods) / 100n
     let roi = boostedRoi + standardRoi
 
+    // 2. Global Income Cap (4x)
+    const maxGlobal = idVal * 4n
+    const currentCapped = userData[27] || 0n
+    if (currentCapped + roi > maxGlobal) {
+      roi = maxGlobal > currentCapped ? maxGlobal - currentCapped : 0n
+    }
+
     const maxRoi = idVal * 2n
     if (earned + roi > maxRoi) {
       roi = maxRoi > earned ? maxRoi - earned : 0n
@@ -419,7 +410,8 @@ export default function DashboardPage() {
       // 2. MY Global Cap (4x)
       const myMaxGlobal = userData[2] * 4n
       const myTotalCapped = userData[27] // totalCappedIncome
-      const myRemainingGlobal = myMaxGlobal > myTotalCapped ? myMaxGlobal - myTotalCapped : 0n
+      // Subtract liveRoi because ROI is settled first in the contract, consuming cap space
+      const myRemainingGlobal = myMaxGlobal > (myTotalCapped + liveRoi) ? myMaxGlobal - (myTotalCapped + liveRoi) : 0n
 
       const myBonus = (roi * 5n) / 100n
       if (totalLiveDirectRoi + myBonus > myRemainingGlobal) {
@@ -430,7 +422,7 @@ export default function DashboardPage() {
       }
     })
     return totalLiveDirectRoi
-  }, [referralDataResults, level1UnlockTimestamp, userData, lastSyncTimestamp])
+  }, [referralDataResults, level1UnlockTimestamp, userData, lastSyncTimestamp, liveRoi])
 
   const { writeContract, data: hash, isPending: isTxPending } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
@@ -1034,7 +1026,9 @@ export default function DashboardPage() {
                               </div>
                             </td>
                             <td>
-                              {tx.txHash ? (
+                              {tx.isVirtual ? (
+                                <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>Continuous Growth</span>
+                              ) : (
                                 <a
                                   href={`${isBscTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com'}/tx/${tx.txHash}`}
                                   target="_blank"
@@ -1043,8 +1037,6 @@ export default function DashboardPage() {
                                 >
                                   View on Explorer <Globe size={14} />
                                 </a>
-                              ) : (
-                                <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>Continuous Growth</span>
                               )}
                             </td>
                           </motion.tr>
@@ -1085,7 +1077,7 @@ export default function DashboardPage() {
                               hour12: true
                             })}
                           </span>
-                          {tx.txHash && (
+                          {!tx.isVirtual && (
                             <a href={`${isBscTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com'}/tx/${tx.txHash}`} target="_blank" className="table-link">
                               Explorer <Globe size={12} />
                             </a>
@@ -1286,7 +1278,11 @@ export default function DashboardPage() {
                           />
                         </div>
                         <div className="cap-info-row">
-                          <span>Income: {parseFloat(formatUnits(totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n), 18)).toFixed(2)}</span>
+                          <span>Income: {parseFloat(formatUnits(
+                            (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) > (idValue * 4n) 
+                              ? (idValue * 4n) 
+                              : (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)), 
+                            18)).toFixed(2)}</span>
                           <span>Global Max: {parseFloat(formatUnits(idValue * 4n, 18)).toFixed(2)}</span>
                         </div>
                         <span className="cap-footer-note">*Excludes BDI and Team Rewards</span>
