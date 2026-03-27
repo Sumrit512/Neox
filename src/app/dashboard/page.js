@@ -262,7 +262,7 @@ export default function DashboardPage() {
     const idVal = userData[2]
     const earned = userData[6]
     const now = BigInt(Math.floor(Date.now() / 1000))
-    const period = 300n // 5 minutes
+    const period = 60n // 1 minute
 
     if (!last || last === 0n || last >= now || idVal === 0n) return 0n
 
@@ -271,7 +271,10 @@ export default function DashboardPage() {
     if (periods <= 0n) return 0n
 
     const rate = userData[11] ? 4n : (userData[10] ? 3n : 2n)
-    let roi = (idVal * rate * periods) / 100n
+    const boostedStake = userData[28] || 0n
+    const boostedRoi = (boostedStake * rate * periods) / 100n
+    const standardRoi = ((idVal - boostedStake) * 2n * periods) / 100n
+    let roi = boostedRoi + standardRoi
 
     const maxRoi = idVal * 2n
     if (earned + roi > maxRoi) {
@@ -323,7 +326,7 @@ export default function DashboardPage() {
     if (!referralDataResults || !Array.isArray(referralDataResults) || !level1UnlockTimestamp || level1UnlockTimestamp === 0n) return 0n
     let totalLiveDirectRoi = 0n
     const now = BigInt(Math.floor(Date.now() / 1000))
-    const period = 300n // DAY_PERIOD
+    const period = 60n // 1 minute (DAY_PERIOD)
     const myUnlock = BigInt(level1UnlockTimestamp)
 
     referralDataResults.forEach(res => {
@@ -354,7 +357,10 @@ export default function DashboardPage() {
       if (totalPeriods <= 0n) return
 
       const rate = b4 ? 4n : b2 ? 3n : 2n
-      const perPeriodRoi = (idVal * rate) / 100n
+      const boostedStake = r[28] || 0n
+      const boostedPerPeriod = (boostedStake * rate) / 100n
+      const standardPerPeriod = ((idVal - boostedStake) * 2n) / 100n
+      const perPeriodRoi = boostedPerPeriod + standardPerPeriod
       let roi = perPeriodRoi * periods
 
       // 1. Referral's Personal ROI Cap (2x)
@@ -415,7 +421,8 @@ export default function DashboardPage() {
     boosterQualifiedDirects: userDataArray[24],
     isQualified100: userDataArray[25],
     isQualifiedBooster: userDataArray[26],
-    totalCappedIncome: userDataArray[27]
+    totalCappedIncome: userDataArray[27],
+    boostedStake: userDataArray[28]
   } : userDataArray
 
   const {
@@ -562,7 +569,7 @@ export default function DashboardPage() {
 
     const virtual = []
     const nowTs = BigInt(Math.floor(Date.now() / 1000))
-    const period = 300n // 5 Mins
+    const period = 60n // 1 minute
 
     // Real logs are already processed in fetchLogs
     const processedLogs = filteredTransactions
@@ -590,7 +597,10 @@ export default function DashboardPage() {
 
       if (lastRoiTimestamp && lastRoiTimestamp > 0n && idValue > 0n && currentRoiEarned < maxRoi) {
         const rate = isBoosted4 ? 4n : (isBoosted2 ? 3n : 2n)
-        const perPeriod = (idValue * rate) / 100n
+        const bStake = BigInt(boostedStake || 0n)
+        const boostedPerPeriod = (bStake * rate) / 100n
+        const standardPerPeriod = ((idValue - bStake) * 2n) / 100n
+        const perPeriod = boostedPerPeriod + standardPerPeriod
         const elapsed = nowTs - lastRoiTimestamp
         const periods = elapsed / period
         let cumulative = currentRoiEarned
@@ -632,7 +642,10 @@ export default function DashboardPage() {
 
           if (refLast && refLast > 0n && refIdVal > 0n && refEarned < refMax) {
             const refRate = refB4 ? 4n : (refB2 ? 3n : 2n)
-            const refPerPeriod = (refIdVal * refRate) / 100n
+            const refBoostedStake = r[28] || 0n
+            const boostedPerPeriod = (refBoostedStake * refRate) / 100n
+            const standardPerPeriod = ((refIdVal - refBoostedStake) * 2n) / 100n
+            const refPerPeriod = boostedPerPeriod + standardPerPeriod
             const refElapsed = nowTs - refLast
             const refPeriodsCount = refElapsed / period
             let refCumulative = refEarned
@@ -759,7 +772,7 @@ export default function DashboardPage() {
     const interval = setInterval(() => {
       const now = Math.floor(Date.now() / 1000)
       const last = Number(lastRoiTimestamp)
-      const period = 300 // 5 minutes (DAY_PERIOD)
+      const period = 60 // 1 minute (DAY_PERIOD)
       const elapsed = now - last
       const remaining = period - (elapsed % period)
       setNextYieldTimer(remaining > 0 ? remaining : 0)

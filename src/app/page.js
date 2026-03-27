@@ -127,7 +127,7 @@ export default function Home() {
               icon={TrendingUp}
               title="Yield Harvest (ROI)"
               description="Continuous algorithmic growth. Earn consistent daily returns directly on your stake value."
-              stats="2x Cap | 2% Daily"
+              stats="2x Cap | 1% Per Period"
               color="var(--primary)"
               delay={0.1}
             />
@@ -135,7 +135,7 @@ export default function Home() {
               icon={Zap}
               title="Business Dev Fund"
               description="Reward for network architects. Earn fixed daily USDT based on your total business volume."
-              stats="100 Days | Tiered"
+              stats="10 Periods | Tiered"
               color="var(--secondary)"
               delay={0.2}
             />
@@ -143,7 +143,7 @@ export default function Home() {
               icon={Users}
               title="Team Matching"
               description="Balance your genetic matrix. Activate massive rewards by matching downline legs effectively."
-              stats="Leg Balanced | 100 Days"
+              stats="Leg Balanced | 10 Periods"
               color="var(--accent)"
               delay={0.3}
             />

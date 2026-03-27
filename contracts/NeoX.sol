@@ -21,8 +21,8 @@ contract NeoX {
     uint256 public constant DOWNLINE_BONUS_PCT = 5; // 5% per level (up to 2)
     
     // Time periods
-    uint256 public DAY_PERIOD = 5 minutes; // Will be 10 minutes for dev
-    uint256 public constant BOOST_WINDOW = 20 minutes;
+    uint256 public DAY_PERIOD = 1 minutes; // Will be 1 minutes for dev
+    uint256 public constant BOOST_WINDOW = 5 minutes;
     
     struct User {
         bool isRegistered;
@@ -56,6 +56,7 @@ contract NeoX {
         bool isQualified100; // Has reached 100 USDT anytime
         bool isQualifiedBooster; // Reached 100 USDT within sponsor's window
         uint256 totalCappedIncome; // ROI + Direct + Upline + Downline (Capped at 4x stake)
+        uint256 boostedStake;      // Stake eligible for boosted ROI (%)
     }
     
     mapping(address => User) public users;
@@ -65,13 +66,13 @@ contract NeoX {
     address[] public allUsers;
     
     // BDI Tiers
-    uint256 public constant BDI_DURATION = 100; // periods
+    uint256 public constant BDI_DURATION = 10; // periods
     uint256[] public bdiRates = [0, 10 * 1e18, 50 * 1e18, 100 * 1e18, 200 * 1e18];
     uint256[] public bdiThresholds = [0, 1000 * 1e18, 5000 * 1e18, 10000 * 1e18, 25000 * 1e18];
 
     // Matching Reward
     uint256 public constant MATCHING_REWARD_AMOUNT = 10 * 1e18; // 10 USDT
-    uint256 public constant MATCHING_REWARD_DURATION = 100;     // 100 periods
+    uint256 public constant MATCHING_REWARD_DURATION = 10;     // 10 periods
     uint256 public constant MATCHING_THRESHOLD = 1000 * 1e18;   // 1000 USDT
     
     event Joined(address indexed user, address indexed sponsor);
@@ -91,6 +92,7 @@ contract NeoX {
         users[_rootUser].totalDeposited = JOIN_FEE;
         users[_rootUser].joinTimestamp = block.timestamp;
         users[_rootUser].lastRoiTimestamp = block.timestamp;
+        users[_rootUser].boostedStake = JOIN_FEE;
         allUsers.push(_rootUser);
         
         // Special Users mapping
@@ -134,6 +136,7 @@ contract NeoX {
         users[msg.sender].totalDeposited = JOIN_FEE;
         users[msg.sender].joinTimestamp = block.timestamp;
         users[msg.sender].lastRoiTimestamp = block.timestamp;
+        users[msg.sender].boostedStake = JOIN_FEE;
         
         allUsers.push(msg.sender);
         users[_sponsor].directReferrals++;
@@ -173,6 +176,10 @@ contract NeoX {
         
         users[msg.sender].idValue += _amount;
         users[msg.sender].totalDeposited += _amount;
+        
+        if (block.timestamp <= users[msg.sender].joinTimestamp + BOOST_WINDOW) {
+            users[msg.sender].boostedStake += _amount;
+        }
         
         _updateBusinessValue(msg.sender, _amount);
         _updateQualifiedStatus(msg.sender);
@@ -289,7 +296,9 @@ contract NeoX {
         if (periodsSpent == 0) return (0, 0);
         
         uint256 rate = getRoiRate(_user);
-        uint256 roiAmount = (u.idValue * rate * periodsSpent) / 100;
+        uint256 boostedRoi = (u.boostedStake * rate * periodsSpent) / 100;
+        uint256 standardRoi = ((u.idValue - u.boostedStake) * 2 * periodsSpent) / 100;
+        uint256 roiAmount = boostedRoi + standardRoi;
         
         // 1. Personal ROI Cap (2x)
         uint256 maxRoi = u.idValue * 2;
