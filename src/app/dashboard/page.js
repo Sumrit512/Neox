@@ -84,11 +84,12 @@ export default function DashboardPage() {
     try {
       const latestBlock = await getBlockNumber(publicClient);
 
-      // STABLE SCAN: 1,000,000 blocks back in chunks of 5,000
-      const SCAN_DEPTH = 1000000n;
+      // STABLE SCAN: Dynamic depth based on joinTimestamp
+      const nowTs = BigInt(Math.floor(Date.now() / 1000));
+      const userJoined = userData ? BigInt(userData[4]) : 0n; // Index 4 is joinTimestamp
+      const blocksAgo = userJoined > 0n ? ((nowTs - userJoined) / 3n) + 30000n : 1000000n;
+      const targetBlock = latestBlock > blocksAgo ? latestBlock - blocksAgo : 0n;
       const CHUNK = 5000n;
-
-      const targetBlock = latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n;
       let currentTo = latestBlock;
       let allRawLogs = [];
       let joinFound = false;
@@ -129,6 +130,7 @@ export default function DashboardPage() {
         if (currentFrom < targetBlock) currentFrom = targetBlock;
 
         console.log(`[NeoX] Scanning Chunk: ${currentFrom} to ${currentTo}`);
+        setCurrentBlockCursor(currentFrom); // Update UI progress
         const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
         allRawLogs = [...allRawLogs, ...chunkResults.flat()];
 
