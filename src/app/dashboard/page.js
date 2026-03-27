@@ -432,7 +432,7 @@ export default function DashboardPage() {
     bdiStartTime, lastBdiTimestamp, currentBdiTier, bdiEndTimestamp, totalBdiEarned,
     maxLegBusiness, lastRewardTimestamp, rewardEndTimestamp, totalRewardEarned, isRewardActive,
     totalDirectEarned, totalQualifiedDirects, boosterQualifiedDirects, isQualified100, isQualifiedBooster,
-    totalCappedIncome
+    totalCappedIncome, boostedStake
   } = u
 
   const isMaxRoiReached = useMemo(() => {
@@ -733,7 +733,7 @@ export default function DashboardPage() {
     lastRoiTimestamp, idValue, isBoosted2, isBoosted4, totalRoiEarned,
     lastBdiTimestamp, currentBdiTier, bdiEndTimestamp,
     lastRewardTimestamp, isRewardActive, rewardEndTimestamp,
-    referralDataResults, isConnected, mounted, searchQuery, transactions, joinTimestamp])
+    referralDataResults, isConnected, mounted, searchQuery, transactions, joinTimestamp, boostedStake])
 
   const paginatedTransactions = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE

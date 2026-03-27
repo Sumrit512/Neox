@@ -164,7 +164,7 @@ contract NeoX {
         require(users[msg.sender].isRegistered, "Not registered");
         require(_amount >= MIN_UPGRADE, "Amount too low");
         
-        // CRITICAL: Settle old ROI at current idValue BEFORE upgrading stake
+        // 1. Settle old ROI at current low stake BEFORE adding new stake
         _settleRoi(msg.sender);
         _settleBdi(msg.sender);
         
@@ -181,9 +181,13 @@ contract NeoX {
             users[msg.sender].boostedStake += _amount;
         }
         
+        // 2. NOW update qualification and booster status WITH the new stake
         _updateBusinessValue(msg.sender, _amount);
         _updateQualifiedStatus(msg.sender);
         checkBoostStatus(msg.sender);
+        
+        // 3. Settle AGAIN if booster was activated to ensure new rate applies from THIS block
+        // (checkBoostStatus handles the second settlement internal to it)
         
         // 5% Direct Upgrade Income to sponsor
         address sponsor = users[msg.sender].sponsor;
@@ -203,24 +207,23 @@ contract NeoX {
 
     function checkBoostStatus(address _user) public {
         User storage u = users[_user];
-        // Condition: User must have at least 100 USDT deposited
         if (u.idValue < 100 * 1e18) return;
         
-        if (block.timestamp <= u.joinTimestamp + BOOST_WINDOW) {
-            if (u.boosterQualifiedDirects >= 4 && !u.isBoosted4) {
-                // Settle pending earnings at OLD rate before boosting
-                _settleRoi(_user);
-                _settleBdi(_user);
-                u.isBoosted4 = true;
-                u.isBoosted2 = false;
-                emit BoosterActivated(_user, 4);
-            } else if (u.boosterQualifiedDirects >= 2 && !u.isBoosted4 && !u.isBoosted2) {
-                // Settle pending earnings at OLD rate before boosting
-                _settleRoi(_user);
-                _settleBdi(_user);
-                u.isBoosted2 = true;
-                emit BoosterActivated(_user, 2);
-            }
+        if (u.boosterQualifiedDirects >= 4 && !u.isBoosted4) {
+            // First flip flag...
+            u.isBoosted4 = true;
+            u.isBoosted2 = false;
+            // ...THEN settle at the NEW rate if there's any pending time in this same block
+            _settleRoi(_user);
+            _settleBdi(_user);
+            emit BoosterActivated(_user, 4);
+        } else if (u.boosterQualifiedDirects >= 2 && !u.isBoosted4 && !u.isBoosted2) {
+            // First flip flag...
+            u.isBoosted2 = true;
+            // ...THEN settle at the NEW rate
+            _settleRoi(_user);
+            _settleBdi(_user);
+            emit BoosterActivated(_user, 2);
         }
     }
 
