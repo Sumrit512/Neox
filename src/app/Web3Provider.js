@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config'
-import { WagmiProvider, http, cookieStorage, createStorage } from 'wagmi'
+import { WagmiProvider, http, cookieStorage, createStorage, fallback } from 'wagmi'
 import { bsc, bscTestnet } from 'wagmi/chains'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -28,7 +28,13 @@ export const config = defaultWagmiConfig({
         storage: cookieStorage
     }),
     transports: {
-        [bsc.id]: http(),
+        [bsc.id]: fallback([
+            http('https://bsc-dataseed.binance.org/'),
+            http('https://binance.llamarpc.com'),
+            http('https://bsc.meowrpc.com'),
+            http('https://1rpc.io/bnb'),
+            http('https://56.rpc.thirdweb.com')
+        ]),
         [bscTestnet.id]: http('https://bsc-testnet.publicnode.com') // Using a reliable public node
     }
 })
