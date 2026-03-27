@@ -20,8 +20,8 @@ contract NeoX {
     uint256 public constant DOWNLINE_BONUS_PCT = 5; // 5% per level (up to 2)
     
     // Time periods
-    uint256 public DAY_PERIOD = 1 minutes; // Will be 1 minutes for dev
-    uint256 public constant BOOST_WINDOW = 5 minutes;
+    uint256 public DAY_PERIOD = 24 hours; 
+    uint256 public constant BOOST_WINDOW = 48 hours;
     
     struct User {
         bool isRegistered;
@@ -65,13 +65,13 @@ contract NeoX {
     address[] public allUsers;
     
     // BDI Tiers
-    uint256 public constant BDI_DURATION = 10; // periods
+    uint256 public constant BDI_DURATION = 100; // periods
     uint256[] public bdiRates = [0, 10 * 1e18, 50 * 1e18, 100 * 1e18, 200 * 1e18];
     uint256[] public bdiThresholds = [0, 1000 * 1e18, 5000 * 1e18, 10000 * 1e18, 25000 * 1e18];
 
     // Matching Reward
     uint256 public constant MATCHING_REWARD_AMOUNT = 10 * 1e18; // 10 USDT
-    uint256 public constant MATCHING_REWARD_DURATION = 10;     // 10 periods
+    uint256 public constant MATCHING_REWARD_DURATION = 100;     // 100 periods
     uint256 public constant MATCHING_THRESHOLD = 1000 * 1e18;   // 1000 USDT
     
     event Joined(address indexed user, address indexed sponsor);

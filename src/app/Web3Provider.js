@@ -18,11 +18,12 @@ const metadata = {
 }
 
 const chains = [bsc, bscTestnet]
-const config = defaultWagmiConfig({
+export const config = defaultWagmiConfig({
     chains,
     projectId,
     metadata,
     ssr: true,
+    defaultChain: bsc,
     storage: createStorage({
         storage: cookieStorage
     }),

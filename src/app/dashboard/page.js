@@ -64,7 +64,8 @@ export default function DashboardPage() {
   const isInitialLoad = useRef(true)
 
   const isBscTestnet = chainId === bscTestnet.id
-  const currentNetworkName = isBscTestnet ? 'BSC Testnet' : (chainId === bsc.id ? 'BSC Mainnet' : 'Chain')
+  const isBscMainnet = chainId === bsc.id
+  const currentNetworkName = isBscMainnet ? 'BSC Mainnet' : (isBscTestnet ? 'BSC Testnet' : 'Chain')
 
   const { data: userData, refetch: refetchUserData, isLoading: isUserLoading } = useReadContract({
     address: NEOX_ADDRESS,
@@ -291,7 +292,7 @@ export default function DashboardPage() {
     const idVal = userData[2]
     const earned = userData[6]
     const now = BigInt(Math.floor(Date.now() / 1000))
-    const period = 60n // 1 minute
+    const period = 86400n // 24 hours
 
     if (!last || last === 0n || last >= now || idVal === 0n) return 0n
 
@@ -362,7 +363,7 @@ export default function DashboardPage() {
     if (!referralDataResults || !Array.isArray(referralDataResults) || !level1UnlockTimestamp || level1UnlockTimestamp === 0n) return 0n
     let totalLiveDirectRoi = 0n
     const now = BigInt(Math.floor(Date.now() / 1000))
-    const period = 60n // 1 minute (DAY_PERIOD)
+    const period = 86400n // 24 hours
     const myUnlock = BigInt(level1UnlockTimestamp)
 
     referralDataResults.forEach(res => {
@@ -606,7 +607,7 @@ export default function DashboardPage() {
 
     const virtual = []
     const nowTs = BigInt(Math.floor(Date.now() / 1000))
-    const period = 60n // 1 minute
+    const period = 86400n // 24 hours
 
     // Real logs are already processed in fetchLogs
     const processedLogs = filteredTransactions
@@ -809,7 +810,7 @@ export default function DashboardPage() {
     const interval = setInterval(() => {
       const now = Math.floor(Date.now() / 1000)
       const last = Number(lastRoiTimestamp)
-      const period = 60 // 1 minute (DAY_PERIOD)
+      const period = 86400 // 24 hours
       const elapsed = now - last
       const remaining = period - (elapsed % period)
       setNextYieldTimer(remaining > 0 ? remaining : 0)
@@ -837,9 +838,10 @@ export default function DashboardPage() {
 
 
   const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60)
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
     const s = seconds % 60
-    return `${m}:${s < 10 ? '0' : ''}${s}`
+    return `${h > 0 ? h + ':' : ''}${m < 10 && h > 0 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`
   }
 
   if (!isConnected) {
@@ -926,7 +928,7 @@ export default function DashboardPage() {
                 </div>
               </>
             )}
-            <button className="btn-secondary upgrade-btn" onClick={() => setIsUpgradeModalOpen(true)} disabled={!isRegistered || !isBscTestnet}>
+            <button className="btn-secondary upgrade-btn" onClick={() => setIsUpgradeModalOpen(true)} disabled={!isRegistered || (!isBscTestnet && !isBscMainnet)}>
               <Zap size={18} /> Upgrade ID
             </button>
           </div>
@@ -1208,7 +1210,7 @@ export default function DashboardPage() {
                     <div className="section-header">
                       <h3 className="section-title"><PieChart size={20} /> Yield Controller</h3>
                       <div className="rate-badge">
-                        <div className="rate-value">{roiRate?.toString() || '2'}% Every 1 Min</div>
+                        <div className="rate-value">{roiRate?.toString() || '2'}% Every 24 Hours</div>
                       </div>
                       <div className="rate-badge" style={{
                         background: isMaxRoiReached ? 'rgba(255, 68, 68, 0.1)' : 'rgba(138, 43, 226, 0.1)',
