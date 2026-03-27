@@ -47,6 +47,8 @@ export default function DashboardPage() {
   const [upgradeAmount, setUpgradeAmount] = useState('')
   const [activeTab, setActiveTab] = useState('overview')
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState(Date.now())
   const [lastAction, setLastAction] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [loadingLogs, setLoadingLogs] = useState(false)
@@ -64,12 +66,12 @@ export default function DashboardPage() {
   const isBscTestnet = chainId === bscTestnet.id
   const currentNetworkName = isBscTestnet ? 'BSC Testnet' : (chainId === bsc.id ? 'BSC Mainnet' : 'Chain')
 
-  const { data: userData, refetch: refetchUser } = useReadContract({
+  const { data: userData, refetch: refetchUserData, isLoading: isUserLoading } = useReadContract({
     address: NEOX_ADDRESS,
     abi: NEOX_ABI,
     functionName: 'users',
     args: [address],
-    query: { enabled: !!address }
+    query: { enabled: !!address, gcTime: 0, staleTime: 0 }
   })
 
   // BULLETPROOF RECURSIVE LOG SCANNING
@@ -81,18 +83,28 @@ export default function DashboardPage() {
     try {
       const latestBlock = await getBlockNumber(publicClient);
 
-      // STABLE SCAN: 1,000,000 blocks back in chunks of 5,000
-      const SCAN_DEPTH = 1000000n;
-      const CHUNK = 5000n;
+      // STABLE SCAN: 2,000,000 blocks back in chunks of 2,000
+      const SCAN_DEPTH = 2000000n;
+      const CHUNK = 2000n;
 
-      const targetBlock = latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n;
+      // Use joinTimestamp as a more efficient stop-point if available
+      let joinBlock = 0n;
+      if (joinTimestamp && joinTimestamp > 0n) {
+          // Approximate block: (now - join) / 3s per block
+          const now = BigInt(Math.floor(Date.now() / 1000));
+          const diff = now - BigInt(joinTimestamp);
+          joinBlock = latestBlock - (diff / 3n) - 5000n; // 5k block buffer
+          if (joinBlock < 0n) joinBlock = 0n;
+      }
+
+      const targetBlock = joinBlock > 0n ? joinBlock : (latestBlock > SCAN_DEPTH ? latestBlock - SCAN_DEPTH : 0n);
       let currentTo = latestBlock;
       let allRawLogs = [];
       let joinFound = false;
 
       const eventNames = ['Joined', 'Upgraded', 'Withdrawn', 'IncomeReceived'];
 
-      // RECURSIVE SCANNER: Splits ranges automatically if the node complains
+      // RECURSIVE SCANNER: Smaller splits and higher resilience
       const deepScan = async (name, from, to) => {
         try {
           const eventObj = NEOX_ABI.find(x => x.name === name);
@@ -106,33 +118,35 @@ export default function DashboardPage() {
           if (name === 'Joined' && logs.length > 0) joinFound = true;
           return logs;
         } catch (err) {
-          if ((to - from) > 50n) {
+          if ((to - from) > 20n) { // Smarter splitting
             const mid = from + (to - from) / 2n;
-            const [h1, h2] = await Promise.all([
-              deepScan(name, from, mid),
-              deepScan(name, mid + 1n, to)
-            ]);
+            const h1 = await deepScan(name, from, mid);
+            await new Promise(r => setTimeout(r, 50)); // Breathe
+            const h2 = await deepScan(name, mid + 1n, to);
             return [...h1, ...h2];
           }
           return [];
         }
       };
 
-      console.log(`[NeoX] Stable Sync Start: ${latestBlock} down to ${targetBlock}`);
+      console.log(`[NeoX] Optimized Sync: ${latestBlock} down to ${targetBlock}`);
 
-      // SEQUENTIAL CHUNK LOOP
+      // SEQUENTIAL CHUNK LOOP: Don't hammer the RPC in parallel
       while (currentTo > targetBlock && !joinFound) {
         let currentFrom = currentTo > CHUNK ? currentTo - CHUNK : 0n;
         if (currentFrom < targetBlock) currentFrom = targetBlock;
 
-        console.log(`[NeoX] Scanning Chunk: ${currentFrom} to ${currentTo}`);
-        const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
-        allRawLogs = [...allRawLogs, ...chunkResults.flat()];
+        console.log(`[NeoX] Chunk: ${currentFrom} to ${currentTo}`);
+        
+        // Use sequential for events to prevent "Connection Closed"
+        for (const name of eventNames) {
+            const result = await deepScan(name, currentFrom, currentTo);
+            allRawLogs = [...allRawLogs, ...result];
+            if (joinFound) break;
+            await new Promise(r => setTimeout(r, 30)); // Small RPC gap
+        }
 
         currentTo = currentFrom - 1n;
-
-        // Optional: Small delay to let RPC breathe if needed
-        // await new Promise(r => setTimeout(r, 100));
       }
 
       const allRaw = allRawLogs;
@@ -171,16 +185,20 @@ export default function DashboardPage() {
           type = 'Withdrawal'; isPositive = false;
         }
 
+        const txid = log.transactionHash || log.txHash || log.hash;
+        if (eventName === 'Joined') console.log("[NeoX] Found Joined Event with Hash:", txid);
+
         return {
-          id: `${log.transactionHash}-${log.logIndex}`,
+          id: `${txid || 'unknown'}-${log.logIndex}`,
           type,
           amount,
           isPositive,
-          txHash: log.transactionHash,
+          txHash: txid,
           blockNumber: Number(log.blockNumber),
           logIndex: log.logIndex,
           timestamp: blockTimestamps.get(log.blockNumber) || Date.now(),
-          isReal: true
+          isReal: true,
+          isVirtual: false // CRITICAL: Explicitly mark as NOT virtual
         };
       });
 
@@ -229,7 +247,7 @@ export default function DashboardPage() {
     abi: NEOX_ABI,
     functionName: 'pendingBdiIncome',
     args: [address],
-    query: { enabled: !!address, refetchInterval: 30000 } // Poll every 30s
+    query: { enabled: !!address, refetchInterval: 30000, gcTime: 0, staleTime: 0 } // Poll every 30s
   })
 
   const { data: pendingRoi, refetch: refetchRoi } = useReadContract({
@@ -237,7 +255,7 @@ export default function DashboardPage() {
     abi: NEOX_ABI,
     functionName: 'pendingRoiIncome',
     args: [address],
-    query: { enabled: !!address, refetchInterval: 30000 } // Poll every 30s
+    query: { enabled: !!address, refetchInterval: 30000, gcTime: 0, staleTime: 0 } // Poll every 30s
   })
 
   const { data: pendingReward, refetch: refetchReward } = useReadContract({
@@ -245,16 +263,43 @@ export default function DashboardPage() {
     abi: NEOX_ABI,
     functionName: 'pendingRewardIncome',
     args: [address],
-    query: { enabled: !!address, refetchInterval: 30000 } // Poll every 30s
+    query: { enabled: !!address, refetchInterval: 30000, gcTime: 0, staleTime: 0 } // Poll every 30s
   })
 
-  const { data: roiRate } = useReadContract({
+  const { data: roiRate, refetch: refetchRoiRate } = useReadContract({
     address: NEOX_ADDRESS,
     abi: NEOX_ABI,
     functionName: 'getRoiRate',
     args: [address],
-    query: { enabled: !!address }
+    query: { enabled: !!address, gcTime: 0, staleTime: 0 }
   })
+
+  const handleManualSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    console.log("[NeoX] --- Manual Sync Started ---");
+    try {
+      // We manually log the refetch results to see if they actually change
+      const [u, b, r, rw, rt] = await Promise.all([
+        refetchUserData(),
+        refetchBdi(),
+        refetchRoi(),
+        refetchReward(),
+        refetchRoiRate()
+      ]);
+      
+      console.log("[NeoX] User Data Refetched:", u?.data);
+      console.log("[NeoX] ROI Refetched:", r?.data);
+      
+      await fetchLogs(true);
+      setLastSyncTimestamp(Date.now());
+      console.log("[NeoX] --- Manual Sync Complete ---");
+    } catch (err) {
+      console.error("[NeoX] Manual Sync Failed:", err);
+    } finally {
+      setTimeout(() => setIsSyncing(false), 1200); // 1.2s spin for clear visual feedback
+    }
+  }, [refetchUserData, refetchBdi, refetchRoi, refetchReward, refetchRoiRate, fetchLogs, isSyncing]);
 
   const liveRoi = useMemo(() => {
     if (!userData || !mounted) return 0n
@@ -271,9 +316,9 @@ export default function DashboardPage() {
     if (periods <= 0n) return 0n
 
     const rate = userData[11] ? 4n : (userData[10] ? 3n : 2n)
-    const boostedStake = userData[28] || 0n
-    const boostedRoi = (boostedStake * rate * periods) / 100n
-    const standardRoi = ((idVal - boostedStake) * 2n * periods) / 100n
+    const boostedStakeVar = userData[28] || 0n
+    const boostedRoi = (boostedStakeVar * rate * periods) / 100n
+    const standardRoi = ((idVal - boostedStakeVar) * 2n * periods) / 100n
     let roi = boostedRoi + standardRoi
 
     const maxRoi = idVal * 2n
@@ -281,7 +326,7 @@ export default function DashboardPage() {
       roi = maxRoi > earned ? maxRoi - earned : 0n
     }
     return roi
-  }, [userData, mounted])
+  }, [userData, mounted, lastSyncTimestamp])
 
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: USDT_ADDRESS_TESTNET,
@@ -385,13 +430,13 @@ export default function DashboardPage() {
       }
     })
     return totalLiveDirectRoi
-  }, [referralDataResults, level1UnlockTimestamp, userData])
+  }, [referralDataResults, level1UnlockTimestamp, userData, lastSyncTimestamp])
 
   const { writeContract, data: hash, isPending: isTxPending } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
 
   // Data Parsing Logic - MUST BE BEFORE EFFECTS AND MEMOS
-  const userDataArray = userData || [false, '0x...', 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, false, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, 0n, 0n, 0n, false, false, 0n]
+  const userDataArray = userData || [false, '0x...', 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, false, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, false, 0n, 0n, 0n, false, false, 0n, 0n, 0n, 0n]
 
   const u = Array.isArray(userDataArray) ? {
     isRegistered: userDataArray[0],
@@ -422,7 +467,7 @@ export default function DashboardPage() {
     isQualified100: userDataArray[25],
     isQualifiedBooster: userDataArray[26],
     totalCappedIncome: userDataArray[27],
-    boostedStake: userDataArray[28]
+    boostedStake: userDataArray[28] // Note: Contract now correctly reports 29 fields in ABI
   } : userDataArray
 
   const {
@@ -752,7 +797,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (isSuccess) {
       setTimeout(() => {
-        refetchUser()
+        refetchUserData()
         refetchAllowance()
         refetchBdi()
         refetchRoi()
@@ -760,7 +805,7 @@ export default function DashboardPage() {
         fetchLogs(true)
       }, 5000) // 5s for block propagation and indexing
     }
-  }, [isSuccess, refetchUser, refetchAllowance, refetchBdi, refetchRoi, refetchReward, fetchLogs])
+  }, [isSuccess, refetchUserData, refetchAllowance, refetchBdi, refetchRoi, refetchReward, fetchLogs])
 
   const [nextYieldTimer, setNextYieldTimer] = useState(0)
 
@@ -819,6 +864,15 @@ export default function DashboardPage() {
 
   return (
     <div className="dashboard-layout">
+      <style jsx global>{`
+        .animate-spin {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
       <Navbar />
 
       <main className="main-content">
@@ -847,21 +901,38 @@ export default function DashboardPage() {
               </div>
             )}
             {isRegistered && (
-              <div className="harvest-control">
-                <button
-                  className="btn-primary harvest-btn"
-                  onClick={() => writeContract({ address: NEOX_ADDRESS, abi: NEOX_ABI, functionName: 'withdraw' })}
-                  disabled={isConfirming || isTxPending || !canHarvest}
+              <>
+                <button 
+                  className="btn-secondary sync-btn" 
+                  onClick={handleManualSync} 
+                  disabled={isSyncing}
+                  style={{ height: '44px', padding: '0 15px', display: 'flex', alignItems: 'center' }}
                 >
-                  {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> :
-                    <><RefreshCw size={18} /> Withdraw {parseFloat(formatUnits(totalAccumulated, 18)).toFixed(4)} USDT</>}
+                  <motion.div
+                    animate={{ rotate: isSyncing ? 360 : 0 }}
+                    transition={{ duration: 1, repeat: isSyncing ? Infinity : 0, ease: "linear" }}
+                    style={{ display: 'flex', marginRight: '8px' }}
+                  >
+                    <RefreshCw size={18} />
+                  </motion.div>
+                  Sync
                 </button>
-                {totalAccumulated > 0n && !canHarvest && (
-                  <span className="min-harvest-hint">
-                    Min. Withdraw: 10.0 USDT (Current: {formatUnits(totalAccumulated, 18).slice(0, 6)})
-                  </span>
-                )}
-              </div>
+                <div className="harvest-control">
+                  <button
+                    className="btn-primary harvest-btn"
+                    onClick={() => writeContract({ address: NEOX_ADDRESS, abi: NEOX_ABI, functionName: 'withdraw' })}
+                    disabled={isConfirming || isTxPending || !canHarvest}
+                  >
+                    {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> :
+                      <><ArrowDownLeft size={18} /> Withdraw {parseFloat(formatUnits(totalAccumulated, 18)).toFixed(4)} USDT</>}
+                  </button>
+                  {totalAccumulated > 0n && !canHarvest && (
+                    <span className="min-harvest-hint">
+                      Min. Withdraw: 10.0 USDT (Current: {formatUnits(totalAccumulated, 18).slice(0, 6)})
+                    </span>
+                  )}
+                </div>
+              </>
             )}
             <button className="btn-secondary upgrade-btn" onClick={() => setIsUpgradeModalOpen(true)} disabled={!isRegistered || !isBscTestnet}>
               <Zap size={18} /> Upgrade ID
@@ -963,9 +1034,7 @@ export default function DashboardPage() {
                               </div>
                             </td>
                             <td>
-                              {tx.isVirtual ? (
-                                <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>Continuous Growth</span>
-                              ) : (
+                              {tx.txHash ? (
                                 <a
                                   href={`${isBscTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com'}/tx/${tx.txHash}`}
                                   target="_blank"
@@ -974,6 +1043,8 @@ export default function DashboardPage() {
                                 >
                                   View on Explorer <Globe size={14} />
                                 </a>
+                              ) : (
+                                <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>Continuous Growth</span>
                               )}
                             </td>
                           </motion.tr>
@@ -1014,7 +1085,7 @@ export default function DashboardPage() {
                               hour12: true
                             })}
                           </span>
-                          {!tx.isVirtual && (
+                          {tx.txHash && (
                             <a href={`${isBscTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com'}/tx/${tx.txHash}`} target="_blank" className="table-link">
                               Explorer <Globe size={12} />
                             </a>
@@ -1145,7 +1216,7 @@ export default function DashboardPage() {
                     <div className="section-header">
                       <h3 className="section-title"><PieChart size={20} /> Yield Controller</h3>
                       <div className="rate-badge">
-                        <div className="rate-value">{roiRate?.toString() || '2'}% Every 5 Mins</div>
+                        <div className="rate-value">{roiRate?.toString() || '2'}% Every 1 Min</div>
                       </div>
                       <div className="rate-badge" style={{
                         background: isMaxRoiReached ? 'rgba(255, 68, 68, 0.1)' : 'rgba(138, 43, 226, 0.1)',
@@ -1271,7 +1342,7 @@ export default function DashboardPage() {
         {isUpgradeModalOpen && (
           <div className="modal-overlay" onClick={closeUpgradeModal}>
             <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }} className="neo-card modal-card" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header"><h2 className="gradient-text">Inject Stake</h2><button className="btn-icon" onClick={closeUpgradeModal} disabled={isConfirming}><X size={20} /></button></div>
+              <div className="modal-header"><h2 className="gradient-text">Upgrade Stake</h2><button className="btn-icon" onClick={closeUpgradeModal} disabled={isConfirming}><X size={20} /></button></div>
               <div className="modal-body">
                 {isSuccess && lastAction === 'upgrade' ? (
                   <div className="success-state-modal">
@@ -1293,7 +1364,7 @@ export default function DashboardPage() {
                       </button>
                     ) : (
                       <button className="btn-primary full-width" onClick={handleUpgrade} disabled={isConfirming || isTxPending || !upgradeAmount || upgradeAmountBI < parseUnits('1', 18)}>
-                        {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> : "Process injection"}
+                        {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> : "Process Upgrade"}
                       </button>
                     )}
                   </>
@@ -1313,6 +1384,9 @@ export default function DashboardPage() {
         .network-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--primary); font-weight: 800; background: rgba(255,215,0,0.05); padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(255,215,0,0.2); backdrop-filter: blur(10px); }
         .pulse-dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; box-shadow: 0 0 10px var(--primary); animation: pulse-anim 2s infinite; }
         @keyframes pulse-anim { 0% { transform: scale(0.9); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.5; } 100% { transform: scale(0.9); opacity: 1; } }
+        
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
         .dashboard-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; gap: 30px; flex-wrap: wrap; }
         .dashboard-title { font-size: clamp(24px, 4vw, 32px); font-weight: 900; letter-spacing: -1px; }

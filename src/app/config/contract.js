@@ -1,4 +1,4 @@
-export const NEOX_ADDRESS = '0xb0a39da67c4edab1fc38b11a8a800f5bb96469ba'
+export const NEOX_ADDRESS = '0xb372dd65d0a1170f6fd60519ffff1b8fab164dee'
 
 export const NEOX_ABI = [
     {
@@ -235,7 +235,8 @@ export const NEOX_ABI = [
             { "internalType": "uint256", "name": "boosterQualifiedDirects", "type": "uint256" },
             { "internalType": "bool", "name": "isQualified100", "type": "bool" },
             { "internalType": "bool", "name": "isQualifiedBooster", "type": "bool" },
-            { "internalType": "uint256", "name": "totalCappedIncome", "type": "uint256" }
+            { "internalType": "uint256", "name": "totalCappedIncome", "type": "uint256" },
+            { "internalType": "uint256", "name": "boostedStake", "type": "uint256" }
         ],
         "stateMutability": "view",
         "type": "function"

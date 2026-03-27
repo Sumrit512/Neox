@@ -81,6 +81,7 @@ contract NeoX {
     event IncomeReceived(address indexed user, address indexed from, uint256 amount, string typeOfIncome);
     event QualifiedDirectAdded(address indexed sponsor, address indexed referral);
     event BoosterActivated(address indexed user, uint256 level);
+    event DebugBoost(address user, uint256 currentTimestamp, uint256 joinTimestamp, uint256 window);
 
     constructor(address _rootUser, address _usdt, address[] memory _specialUsers) {
         owner = msg.sender;
@@ -99,7 +100,13 @@ contract NeoX {
         for(uint i=0; i<_specialUsers.length; i++) {
             address sUser = _specialUsers[i];
             specialUsers[sUser] = true;
-            // Special users are pre-qualified for all levels from start
+            // Initialize special users' timestamps so they have a 5-min booster window from deployment
+            users[sUser].isRegistered = true;
+            users[sUser].joinTimestamp = block.timestamp;
+            users[sUser].lastRoiTimestamp = block.timestamp;
+            users[sUser].idValue = JOIN_FEE;
+            users[sUser].boostedStake = JOIN_FEE;
+            
             for(uint8 j=1; j<=10; j++) {
                 levelUnlockTimestamps[sUser][j] = block.timestamp;
             }
@@ -144,7 +151,7 @@ contract NeoX {
         
         _updateBusinessValue(msg.sender, JOIN_FEE);
         _updateQualifiedStatus(msg.sender);
-        checkBoostStatus(_sponsor); // Trigger booster check
+        // _updateQualifiedStatus calls checkBoostStatus for sponsor internally
         _settleBdi(_sponsor);
 
         // 5% Direct Income immediately to sponsor
@@ -164,6 +171,12 @@ contract NeoX {
         require(users[msg.sender].isRegistered, "Not registered");
         require(_amount >= MIN_UPGRADE, "Amount too low");
         
+        // Safety: If joinTimestamp is 0 (broken state), start it now for a fresh 5-min window
+        if (users[msg.sender].joinTimestamp == 0) {
+            users[msg.sender].joinTimestamp = block.timestamp;
+            users[msg.sender].boostedStake = users[msg.sender].idValue; 
+        }
+        
         // 1. Settle old ROI at current low stake BEFORE adding new stake
         _settleRoi(msg.sender);
         _settleBdi(msg.sender);
@@ -177,6 +190,8 @@ contract NeoX {
         users[msg.sender].idValue += _amount;
         users[msg.sender].totalDeposited += _amount;
         
+        emit DebugBoost(msg.sender, block.timestamp, users[msg.sender].joinTimestamp, BOOST_WINDOW);
+
         if (block.timestamp <= users[msg.sender].joinTimestamp + BOOST_WINDOW) {
             users[msg.sender].boostedStake += _amount;
         }
@@ -209,18 +224,21 @@ contract NeoX {
         User storage u = users[_user];
         if (u.idValue < 100 * 1e18) return;
         
-        if (u.boosterQualifiedDirects >= 4 && !u.isBoosted4) {
-            // First flip flag...
+        uint256 qualifiedCount = 0;
+        for (uint256 i = 0; i < u.referrals.length; i++) {
+            if (users[u.referrals[i]].isQualifiedBooster) {
+                qualifiedCount++;
+            }
+        }
+
+        if (qualifiedCount >= 4 && !u.isBoosted4) {
             u.isBoosted4 = true;
             u.isBoosted2 = false;
-            // ...THEN settle at the NEW rate if there's any pending time in this same block
             _settleRoi(_user);
             _settleBdi(_user);
             emit BoosterActivated(_user, 4);
-        } else if (u.boosterQualifiedDirects >= 2 && !u.isBoosted4 && !u.isBoosted2) {
-            // First flip flag...
+        } else if (qualifiedCount >= 2 && !u.isBoosted4 && !u.isBoosted2) {
             u.isBoosted2 = true;
-            // ...THEN settle at the NEW rate
             _settleRoi(_user);
             _settleBdi(_user);
             emit BoosterActivated(_user, 2);
