@@ -889,11 +889,6 @@ export default function DashboardPage() {
           </div>
 
           <div className="header-actions">
-            {!isBscTestnet && (
-              <div className="neo-card warning-tag">
-                <AlertCircle size={14} /> Switch to BSC Testnet
-              </div>
-            )}
             {isRegistered && (
               <>
                 <button 
