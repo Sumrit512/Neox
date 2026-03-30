@@ -1174,6 +1174,18 @@ export default function DashboardPage() {
           <>
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
               <StatCard
+                title="Total Earnings"
+                value={`${parseFloat(formatUnits(
+                  (totalCappedIncome || 0n) + (liveRoi || 0n) + (liveDirectRoi || 0n) +
+                  (totalBdiEarned || 0n) + BigInt(pendingBdi || 0n) +
+                  (totalRewardEarned || 0n) + BigInt(pendingReward || 0n),
+                  18
+                )).toFixed(4)} USDT`}
+                icon={Wallet}
+                color="#FFD700"
+                delay={0.05}
+              />
+              <StatCard
                 title="Accumulated ROI"
                 value={`${parseFloat(formatUnits((totalRoiEarned || 0n) + (liveRoi || 0n), 18)).toFixed(4)} USDT`}
                 icon={TrendingUp}
@@ -1346,6 +1358,8 @@ export default function DashboardPage() {
                     <div className="data-row"><span>Account Stake</span><span>{formatUnits(idValue || 0n, 18)} USDT</span></div>
                     <div className="data-row"><span>Business Value</span><span>{formatUnits(businessValue || 0n, 18)} USDT</span></div>
                     <div className="data-row"><span>Total Injected</span><span>{formatUnits(totalDeposited || 0n, 18)} USDT</span></div>
+                    <div className="data-row"><span>Direct Team</span><span>{directReferrals ? directReferrals.toString() : '0'} Members</span></div>
+                    <div className="data-row"><span>Qualified Level Team</span><span>{totalQualifiedDirects ? totalQualifiedDirects.toString() : '0'} Members</span></div>
                     <div className="data-row"><span>Creation Date</span><span>{joinTimestamp ? new Date(Number(joinTimestamp) * 1000).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}</span></div>
                     <div className="data-row"><span>Booster Tier</span><span className="tier-tag">{isBoosted4 ? 'ELITE 4%' : isBoosted2 ? 'TURBO 3%' : 'CORE 2%'}</span></div>
                   </div>
