@@ -134,8 +134,7 @@ export default function DashboardPage() {
         const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
         allRawLogs = [...allRawLogs, ...chunkResults.flat()];
 
-        currentTo = currentFrom - 1n;
-
+ 
         // Optional: Small delay to let RPC breathe if needed
         // await new Promise(r => setTimeout(r, 100));
       }
@@ -1354,7 +1353,7 @@ export default function DashboardPage() {
                       <span className="input-unit">USDT</span>
                     </div>
                     {needsApproval && upgradeAmountBI >= parseUnits('1', 18) ? (
-                      <button className="btn-primary full-width" onClick={() => writeContract({ address: USDT_ADDRESS_TESTNET, abi: USDT_ABI, functionName: 'approve', args: [NEOX_ADDRESS, upgradeAmountBI * 100n] })} disabled={isConfirming || isTxPending}>
+                      <button className="btn-primary full-width" onClick={() => writeContract({ address: USDT_ADDRESS_TESTNET, abi: USDT_ABI, functionName: 'approve', args: [NEOX_ADDRESS, upgradeAmountBI] })} disabled={isConfirming || isTxPending}>
                         {isConfirming || isTxPending ? <Loader2 className="animate-spin" /> : "Authorize Transaction"}
                       </button>
                     ) : (

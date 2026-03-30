@@ -77,7 +77,7 @@ function JoinForm() {
       address: USDT_ADDRESS_TESTNET,
       abi: USDT_ABI,
       functionName: 'approve',
-      args: [NEOX_ADDRESS, JOIN_FEE * 100n],
+      args: [NEOX_ADDRESS, JOIN_FEE],
     })
   }
 
