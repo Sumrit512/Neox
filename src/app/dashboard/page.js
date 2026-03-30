@@ -9,7 +9,7 @@ import {
   LayoutDashboard, Activity, PieChart,
   Info, Zap, Network, X, CheckCircle2,
   Clock, History, RefreshCw, AlertCircle,
-  Search, ChevronDown, Globe, HardDrive, UserPlus
+  Search, ChevronDown, Globe, HardDrive, UserPlus, Copy
 } from 'lucide-react'
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, usePublicClient, useChainId, useReadContracts } from 'wagmi'
 import { bsc, bscTestnet } from 'wagmi/chains'
@@ -57,6 +57,19 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const ITEMS_PER_PAGE = 10
+
+  const [copiedLink, setCopiedLink] = useState(false)
+  const referralLink = typeof window !== 'undefined' && address
+    ? `${window.location.origin}/join?ref=${address}`
+    : ''
+
+  const handleCopyLink = () => {
+    if (referralLink) {
+      navigator.clipboard.writeText(referralLink)
+      setCopiedLink(true)
+      setTimeout(() => setCopiedLink(false), 2000)
+    }
+  }
 
   const [currentBlockCursor, setCurrentBlockCursor] = useState(null)
   const [canLoadMore, setCanLoadMore] = useState(true)
@@ -134,7 +147,7 @@ export default function DashboardPage() {
         const chunkResults = await Promise.all(eventNames.map(name => deepScan(name, currentFrom, currentTo)));
         allRawLogs = [...allRawLogs, ...chunkResults.flat()];
 
- 
+
         // Optional: Small delay to let RPC breathe if needed
         // await new Promise(r => setTimeout(r, 100));
       }
@@ -273,10 +286,10 @@ export default function DashboardPage() {
         refetchReward(),
         refetchRoiRate()
       ]);
-      
+
       console.log("[NeoX] User Data Refetched:", u?.data);
       console.log("[NeoX] ROI Refetched:", r?.data);
-      
+
       await fetchLogs(true);
       setLastSyncTimestamp(Date.now());
       console.log("[NeoX] --- Manual Sync Complete ---");
@@ -887,14 +900,25 @@ export default function DashboardPage() {
               <div className="meta-separator"></div>
               <p className="account-address">Account: <span>{address?.slice(0, 6)}...{address?.slice(-4)}</span></p>
             </div>
+            {isRegistered && (
+              <div className="referral-link-container">
+                <span className="ref-label">Referral Link:</span>
+                <div className="ref-link-box" onClick={handleCopyLink}>
+                  <span className="ref-url">{referralLink}</span>
+                  <button className="copy-btn">
+                    {copiedLink ? <CheckCircle2 size={14} color="#00FF7F" /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="header-actions">
             {isRegistered && (
               <>
-                <button 
-                  className="btn-secondary sync-btn" 
-                  onClick={handleManualSync} 
+                <button
+                  className="btn-secondary sync-btn"
+                  onClick={handleManualSync}
                   disabled={isSyncing}
                   style={{ height: '44px', padding: '0 15px', display: 'flex', alignItems: 'center' }}
                 >
@@ -1277,9 +1301,9 @@ export default function DashboardPage() {
                         </div>
                         <div className="cap-info-row">
                           <span>Income: {parseFloat(formatUnits(
-                            (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) > (idValue * 4n) 
-                              ? (idValue * 4n) 
-                              : (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)), 
+                            (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)) > (idValue * 4n)
+                              ? (idValue * 4n)
+                              : (totalCappedIncome + (liveRoi || 0n) + (liveDirectRoi || 0n)),
                             18)).toFixed(2)}</span>
                           <span>Global Max: {parseFloat(formatUnits(idValue * 4n, 18)).toFixed(2)}</span>
                         </div>
@@ -1389,6 +1413,14 @@ export default function DashboardPage() {
         .account-address { color: var(--text-dim); font-size: 12px; word-break: break-all; font-family: 'JetBrains Mono', monospace; }
         .account-address span { color: white; border-bottom: 1px dashed rgba(255,255,255,0.2); }
         
+        .referral-link-container { display: flex; align-items: center; gap: 10px; margin-top: 15px; flex-wrap: wrap; background: rgba(255, 255, 255, 0.02); padding: 8px 12px; border-radius: 12px; border: 1px solid var(--glass-border); width: fit-content; }
+        .ref-label { font-size: 12px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .ref-link-box { display: flex; align-items: center; gap: 8px; background: rgba(0, 0, 0, 0.3); padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s; border: 1px solid transparent; }
+        .ref-link-box:hover { background: rgba(255, 215, 0, 0.05); border-color: rgba(255, 215, 0, 0.2); }
+        .ref-url { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--primary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .copy-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 2px; transition: color 0.2s; }
+        .ref-link-box:hover .copy-btn { color: var(--primary); }
+
         .tab-navigation { 
           display: flex; 
           gap: 10px; 
@@ -1484,6 +1516,8 @@ export default function DashboardPage() {
           .account-meta { justify-content: center; width: 100%; }
           .meta-separator { display: none; }
           .account-address { width: 100%; background: rgba(5, 10, 24, 0.3); padding: 12px; border-radius: 12px; border: 1px solid var(--glass-border); font-size: 11px; }
+          .referral-link-container { width: 100%; flex-direction: column; gap: 8px; justify-content: center; align-items: center; }
+          .ref-url { max-width: 100%; white-space: normal; word-break: break-all; text-align: center; }
           .tree-container { min-height: 400px; }
           .search-group { max-width: 100%; }
           .tab-navigation { justify-content: center; padding-bottom: 5px; margin-bottom: 20px; }
