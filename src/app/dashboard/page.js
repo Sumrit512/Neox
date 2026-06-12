@@ -1200,7 +1200,7 @@ export default function DashboardPage() {
                 delay={0.2}
               />
               <StatCard
-                title="Direct ROI Bonuses"
+                title="Direct ROI Down & Upline"
                 value={`${parseFloat(formatUnits((totalCappedIncome || 0n) - (totalRoiEarned || 0n) - (totalDirectEarned || 0n) + (liveDirectRoi || 0n), 18)).toFixed(4)} USDT`}
                 icon={Activity}
                 color="#00E5FF"
